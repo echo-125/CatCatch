@@ -115,7 +115,7 @@ app/src/main/java/com/catcatch/
 
 ## 浏览器插件联动
 
-通过 URL Scheme `m3u8downloader://add` 唤起 App，参数：
+通过 URL Scheme `catcatch://add` 唤起 App，参数：
 - `url`（必填）：M3U8 播放列表 URL
 - `title`（可选）：视频标题，自动填充文件名
 - `headers`（可选）：自定义请求头 JSON

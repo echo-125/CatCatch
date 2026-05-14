@@ -67,13 +67,13 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 处理 Deep Link Intent
-     * 格式: m3u8downloader://add?url=...&title=...&headers=...&referer=...
+     * 格式: catcatch://add?url=...&title=...&headers=...&referer=...
      */
     private fun handleDeepLink(intent: Intent?) {
         val uri = intent?.data ?: return
 
         // 验证 scheme 和 host
-        if (uri.scheme != "m3u8downloader" || uri.host != "add") return
+        if (uri.scheme != "catcatch" || uri.host != "add") return
 
         val url = uri.getQueryParameter("url") ?: return
 

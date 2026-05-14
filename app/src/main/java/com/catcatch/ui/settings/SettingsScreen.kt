@@ -88,10 +88,10 @@ fun SettingsScreen(
                     SettingsItem(
                         icon = Icons.Default.Language,
                         title = "URL Scheme",
-                        subtitle = "m3u8downloader://add",
+                        subtitle = "catcatch://add",
                         onClick = {
                             clipboardManager.setText(
-                                AnnotatedString("m3u8downloader://add?url=&title=&headers=&referer=")
+                                AnnotatedString("catcatch://add?url=&title=&headers=&referer=")
                             )
                         }
                     )

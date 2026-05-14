@@ -39,12 +39,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Deep Link: m3u8downloader://add?url=...&title=...&headers=...&referer=... -->
+            <!-- Deep Link: catcatch://add?url=...&title=...&headers=...&referer=... -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="m3u8downloader" android:host="add" />
+                <data android:scheme="catcatch" android:host="add" />
             </intent-filter>
         </activity>
 
