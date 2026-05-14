@@ -1,38 +1,35 @@
 package com.catcatch.ui.home
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -43,10 +40,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.catcatch.ui.components.ExpandableSection
 
 /**
  * 主页 — 添加下载任务
- * 横屏/Pad/小窗口自适应布局
+ * 使用 WindowSizeClass 自适应布局
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,90 +74,60 @@ fun HomeScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("猫抓助手") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { paddingValues ->
-        BoxWithConstraints(
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+    ) {
+        // 内容区域
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            val isLandscape = maxWidth > 600.dp
-
-            if (isLandscape) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .width(480.dp)
-                            .fillMaxHeight()
-                            .verticalScroll(rememberScrollState()),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        AddTaskCard(
-                            url = inputState.url,
-                            fileName = inputState.fileName,
-                            headers = inputState.headers,
-                            isAdding = uiEvent.isAdding,
-                            onUrlChange = viewModel::onUrlChange,
-                            onFileNameChange = viewModel::onFileNameChange,
-                            onHeadersChange = viewModel::onHeadersChange,
-                            onAddTask = viewModel::addTask,
-                            onBatchAdd = viewModel::showBatchDialog
-                        )
-                    }
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    AddTaskCard(
-                        url = inputState.url,
-                        fileName = inputState.fileName,
-                        headers = inputState.headers,
-                        isAdding = uiEvent.isAdding,
-                        onUrlChange = viewModel::onUrlChange,
-                        onFileNameChange = viewModel::onFileNameChange,
-                        onHeadersChange = viewModel::onHeadersChange,
-                        onAddTask = viewModel::addTask,
-                        onBatchAdd = viewModel::showBatchDialog
-                    )
-                }
+            // 居中卡片，最大宽度 600dp，两侧16dp边距
+            Column(
+                modifier = Modifier.widthIn(max = 600.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                AddTaskCard(
+                    url = inputState.url,
+                    fileName = inputState.fileName,
+                    headers = inputState.headers,
+                    isAdding = uiEvent.isAdding,
+                    onUrlChange = viewModel::onUrlChange,
+                    onFileNameChange = viewModel::onFileNameChange,
+                    onHeadersChange = viewModel::onHeadersChange,
+                    onAddTask = viewModel::addTask,
+                    onBatchAdd = viewModel::showBatchDialog
+                )
             }
         }
 
-        // 批量添加对话框
-        if (uiEvent.showBatchDialog) {
-            BatchAddDialog(
-                batchText = uiEvent.batchText,
-                isAdding = uiEvent.isAdding,
-                onTextChange = viewModel::onBatchTextChange,
-                onConfirm = viewModel::addBatchTasks,
-                onDismiss = viewModel::hideBatchDialog
-            )
-        }
+        // Snackbar
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.padding(16.dp)
+        )
+    }
+
+    // 批量添加对话框
+    if (uiEvent.showBatchDialog) {
+        BatchAddDialog(
+            batchText = uiEvent.batchText,
+            isAdding = uiEvent.isAdding,
+            onTextChange = viewModel::onBatchTextChange,
+            onConfirm = viewModel::addBatchTasks,
+            onDismiss = viewModel::hideBatchDialog
+        )
     }
 }
 
 /**
  * 添加任务卡片
+ * 支持小窗口极简模式（高度 < 400dp）
  */
 @Composable
 private fun AddTaskCard(
@@ -174,89 +142,160 @@ private fun AddTaskCard(
     onBatchAdd: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
+    val cardShape = RoundedCornerShape(20.dp)
+    val buttonShape = RoundedCornerShape(12.dp)
+    val inputShape = RoundedCornerShape(12.dp)
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
+    BoxWithConstraints {
+        val isCompactHeight = maxHeight < 400.dp
+
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = cardShape
         ) {
-            Text(
-                text = "添加下载任务",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            Column(
+                modifier = Modifier.padding(if (isCompactHeight) 12.dp else 20.dp)
+            ) {
+                if (!isCompactHeight) {
+                    Text(
+                        text = "添加下载任务",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                }
 
-            OutlinedTextField(
-                value = url,
-                onValueChange = onUrlChange,
-                label = { Text("M3U8 链接") },
-                placeholder = { Text("https://example.com/video.m3u8") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                enabled = !isAdding,
-                trailingIcon = {
-                    IconButton(
-                        onClick = {
-                            clipboardManager.getText()?.text?.let { onUrlChange(it) }
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = onUrlChange,
+                    label = { Text("M3U8 链接") },
+                    placeholder = { Text("https://example.com/video.m3u8") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    enabled = !isAdding,
+                    shape = inputShape,
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                clipboardManager.getText()?.text?.let { onUrlChange(it) }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentPaste,
+                                contentDescription = "粘贴"
+                            )
                         }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentPaste,
-                            contentDescription = "粘贴"
+                    }
+                )
+
+                if (isCompactHeight) {
+                    // 小窗口极简模式：只显示 URL 和开始按钮
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 高级选项收入折叠区域
+                    ExpandableSection(title = "高级选项") {
+                        OutlinedTextField(
+                            value = fileName,
+                            onValueChange = onFileNameChange,
+                            label = { Text("文件名（可选）") },
+                            placeholder = { Text("自动生成") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            enabled = !isAdding,
+                            shape = inputShape
                         )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = headers,
+                            onValueChange = onHeadersChange,
+                            label = { Text("请求头（可选）") },
+                            placeholder = { Text("Referer: https://example.com") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2,
+                            maxLines = 4,
+                            enabled = !isAdding,
+                            shape = inputShape
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedButton(
+                            onClick = onBatchAdd,
+                            enabled = !isAdding,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp),
+                            shape = buttonShape
+                        ) {
+                            Text(text = "批量添加")
+                        }
+                    }
+                } else {
+                    // 正常模式：显示所有字段
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = fileName,
+                        onValueChange = onFileNameChange,
+                        label = { Text("文件名（可选）") },
+                        placeholder = { Text("自动生成") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        enabled = !isAdding,
+                        shape = inputShape
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = headers,
+                        onValueChange = onHeadersChange,
+                        label = { Text("请求头（可选）") },
+                        placeholder = { Text("Referer: https://example.com") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 4,
+                        enabled = !isAdding,
+                        shape = inputShape
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 20.dp))
+
+                Button(
+                    onClick = onAddTask,
+                    enabled = !isAdding && url.isNotEmpty(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = buttonShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text(text = if (isAdding) "添加中..." else "开始下载")
+                }
+
+                if (!isCompactHeight) {
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = onBatchAdd,
+                        enabled = !isAdding,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = buttonShape
+                    ) {
+                        Text(text = "批量添加")
                     }
                 }
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = fileName,
-                onValueChange = onFileNameChange,
-                label = { Text("文件名（可选）") },
-                placeholder = { Text("自动生成") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                enabled = !isAdding
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = headers,
-                onValueChange = onHeadersChange,
-                label = { Text("请求头（可选）") },
-                placeholder = { Text("Referer: https://example.com") },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2,
-                maxLines = 4,
-                enabled = !isAdding
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Button(
-                onClick = onAddTask,
-                enabled = !isAdding && url.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = null,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                Text(text = if (isAdding) "添加中..." else "开始下载")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = onBatchAdd,
-                enabled = !isAdding,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(text = "批量添加")
             }
         }
     }

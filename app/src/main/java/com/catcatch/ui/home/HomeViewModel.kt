@@ -1,6 +1,7 @@
 package com.catcatch.ui.home
 
 import android.content.Context
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.catcatch.data.repository.DownloadRepository
@@ -48,15 +49,23 @@ data class UiEventState(
 
 /**
  * 主页 ViewModel
+ * 使用 SavedStateHandle 持久化输入状态
  */
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: DownloadRepository,
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
-    // 输入状态 — 仅主页输入框使用
-    private val _inputState = MutableStateFlow(InputState())
+    // 输入状态 — 仅主页输入框使用，支持进程恢复
+    private val _inputState = MutableStateFlow(
+        InputState(
+            url = savedStateHandle["url"] ?: "",
+            fileName = savedStateHandle["fileName"] ?: "",
+            headers = savedStateHandle["headers"] ?: ""
+        )
+    )
     val inputState: StateFlow<InputState> = _inputState.asStateFlow()
 
     // 任务列表状态 — 由 Room Flow 驱动，下载页使用
@@ -77,6 +86,7 @@ class HomeViewModel @Inject constructor(
      */
     fun onUrlChange(url: String) {
         _inputState.update { it.copy(url = url) }
+        savedStateHandle["url"] = url
     }
 
     /**
@@ -84,6 +94,7 @@ class HomeViewModel @Inject constructor(
      */
     fun onFileNameChange(fileName: String) {
         _inputState.update { it.copy(fileName = fileName) }
+        savedStateHandle["fileName"] = fileName
     }
 
     /**
@@ -91,6 +102,7 @@ class HomeViewModel @Inject constructor(
      */
     fun onHeadersChange(headers: String) {
         _inputState.update { it.copy(headers = headers) }
+        savedStateHandle["headers"] = headers
     }
 
     /**
@@ -131,6 +143,9 @@ class HomeViewModel @Inject constructor(
                 _inputState.update {
                     it.copy(url = "", fileName = "", headers = "")
                 }
+                savedStateHandle["url"] = ""
+                savedStateHandle["fileName"] = ""
+                savedStateHandle["headers"] = ""
                 _uiEventState.update { it.copy(isAdding = false, success = "任务已添加，开始下载") }
             } catch (e: Exception) {
                 _uiEventState.update {

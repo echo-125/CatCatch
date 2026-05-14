@@ -3,78 +3,118 @@ package com.catcatch.ui.settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.catcatch.ui.components.CatCatchTopAppBar
 
 /**
  * 设置页面
+ * 使用 LazyColumn 和分组标题
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen() {
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("设置") },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-        )
+        CatCatchTopAppBar(title = "设置")
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize()
         ) {
-            // 下载目录
-            SettingsItem(
-                icon = Icons.Default.Folder,
-                title = "下载目录",
-                subtitle = "/storage/emulated/0/Download/CatCatch",
-                onClick = { /* TODO: 选择目录 */ }
-            )
+            // 下载设置
+            item {
+                SettingsSection(title = "下载设置") {
+                    SettingsItem(
+                        icon = Icons.Default.Folder,
+                        title = "下载目录",
+                        subtitle = "/storage/emulated/0/Download/CatCatch",
+                        onClick = { /* TODO: 选择目录 */ }
+                    )
+                    SettingsItem(
+                        icon = Icons.Default.Speed,
+                        title = "最大并发任务数",
+                        subtitle = "3",
+                        onClick = { /* TODO: 设置并发数 */ }
+                    )
+                    SettingsItem(
+                        icon = Icons.Default.Code,
+                        title = "每任务并发分片数",
+                        subtitle = "16",
+                        onClick = { /* TODO: 设置分片并发数 */ }
+                    )
+                }
+            }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            // 浏览器插件
+            item {
+                SettingsSection(title = "浏览器插件") {
+                    SettingsItem(
+                        icon = Icons.Default.Language,
+                        title = "URL Scheme",
+                        subtitle = "m3u8downloader://add",
+                        onClick = { /* TODO: 复制到剪贴板 */ }
+                    )
+                }
+            }
 
-            // 版本信息
-            SettingsItem(
-                icon = Icons.Default.Info,
-                title = "版本",
-                subtitle = "1.0.0",
-                onClick = { }
-            )
+            // 外观
+            item {
+                SettingsSection(title = "外观") {
+                    SettingsItem(
+                        icon = Icons.Default.Palette,
+                        title = "深色模式",
+                        subtitle = "跟随系统",
+                        onClick = { /* TODO: 切换深色模式 */ }
+                    )
+                }
+            }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            // 关于
+            item {
+                SettingsSection(title = "关于") {
+                    SettingsItem(
+                        icon = Icons.Default.Info,
+                        title = "版本",
+                        subtitle = "1.0.0",
+                        onClick = { }
+                    )
+                }
+            }
 
-            Text(
-                text = "更多设置将在后续版本中添加",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // 占位项，消除未完成感
+            item {
+                SettingsSection(title = "更多功能") {
+                    SettingsItem(
+                        icon = Icons.Default.Info,
+                        title = "敬请期待",
+                        subtitle = "更多设置将在后续版本中添加",
+                        onClick = { }
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
 private fun SettingsItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     subtitle: String,
     onClick: () -> Unit
@@ -82,6 +122,7 @@ private fun SettingsItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
             .clickable(onClick = onClick)
     ) {
         Row(

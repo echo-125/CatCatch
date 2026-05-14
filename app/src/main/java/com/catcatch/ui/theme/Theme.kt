@@ -10,14 +10,30 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
-private val DarkColorScheme = darkColorScheme()
+private val DarkColorScheme = darkColorScheme(
+    primary = TealPrimaryDark,
+    primaryContainer = TealPrimaryContainerDark,
+    background = BackgroundDark,
+    surface = SurfaceDark,
+    surfaceVariant = SurfaceVariantDark,
+    onSurface = OnSurfaceDark,
+    onSurfaceVariant = OnSurfaceVariantDark
+)
 
-private val LightColorScheme = lightColorScheme()
+private val LightColorScheme = lightColorScheme(
+    primary = TealPrimary,
+    primaryContainer = TealPrimaryContainer,
+    background = BackgroundLight,
+    surface = SurfaceLight,
+    surfaceVariant = SurfaceVariantLight,
+    onSurface = OnSurfaceLight,
+    onSurfaceVariant = OnSurfaceVariantLight
+)
 
 @Composable
 fun CatCatchTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
