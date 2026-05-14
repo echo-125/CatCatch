@@ -4,9 +4,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import com.catcatch.CatCatchApp
-import com.catcatch.R
 import com.catcatch.data.repository.DownloadRepository
+import com.catcatch.data.repository.SettingsRepository
 import com.catcatch.domain.model.Segment
 import com.catcatch.domain.model.TaskStatus
 import com.catcatch.util.NotificationUtil
@@ -20,6 +19,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -39,8 +39,7 @@ class DownloadService : Service() {
         const val EXTRA_TASK_ID = "task_id"
         const val EXTRA_ACTION = "action"
         const val ACTION_CANCEL = "cancel"
-        private const val MAX_CONCURRENT_SEGMENTS = 8
-        private const val MAX_CONCURRENT_TASKS = 3
+        private const val FOREGROUND_NOTIFICATION_ID = 1000
 
         /**
          * 启动下载服务
@@ -73,6 +72,9 @@ class DownloadService : Service() {
     @Inject
     lateinit var ffmpegConverter: FFmpegConverter
 
+    @Inject
+    lateinit var settingsRepository: SettingsRepository
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeTasks = ConcurrentHashMap<Long, Job>()
     private val taskQueue = LinkedHashSet<Long>()
@@ -93,17 +95,18 @@ class DownloadService : Service() {
         }
 
         // 启动前台通知
-        startForeground(R.string.download_channel_name.hashCode(), createForegroundNotification())
+        startForeground(FOREGROUND_NOTIFICATION_ID, createForegroundNotification())
 
         // 添加到队列并尝试启动
         taskQueue.add(taskId)
-        tryStartNext()
+        serviceScope.launch { tryStartNext() }
 
         return START_STICKY
     }
 
-    private fun tryStartNext() {
-        while (activeTasks.size < MAX_CONCURRENT_TASKS && taskQueue.isNotEmpty()) {
+    private suspend fun tryStartNext() {
+        val maxConcurrentTasks = settingsRepository.maxConcurrentTasks.first()
+        while (activeTasks.size < maxConcurrentTasks && taskQueue.isNotEmpty()) {
             val taskId = taskQueue.firstOrNull { it !in activeTasks.keys } ?: break
             taskQueue.remove(taskId)
 
@@ -128,8 +131,8 @@ class DownloadService : Service() {
         taskQueue.remove(taskId)
         serviceScope.launch {
             repository.updateTaskStatus(taskId, TaskStatus.CANCELLED)
+            tryStartNext()
         }
-        tryStartNext()
     }
 
     private fun updateForegroundNotification() {
@@ -183,9 +186,9 @@ class DownloadService : Service() {
             }
 
             // 并发下载分片
-            val semaphore = Semaphore(MAX_CONCURRENT_SEGMENTS)
+            val maxConcurrentSegments = settingsRepository.maxConcurrentSegments.first()
+            val semaphore = Semaphore(maxConcurrentSegments)
             val completedCount = AtomicInteger(0)
-            val segmentProgress = ConcurrentHashMap<Int, Long>()
             var lastUpdateTime = 0L
             val headers = task.headers
 
@@ -195,27 +198,22 @@ class DownloadService : Service() {
                     async {
                         semaphore.withPermit {
                             val segmentFile = File(downloadDir, "segment_${segment.index}.ts")
-                            val result = segmentDownloader.downloadWithRetry(segment, segmentFile, headers) { downloadedBytes, _ ->
-                                segmentProgress[segment.index] = downloadedBytes
+                            val result = segmentDownloader.downloadWithRetry(segment, segmentFile, headers)
+                            if (result.isSuccess) {
+                                val count = completedCount.incrementAndGet()
                                 val now = System.currentTimeMillis()
                                 if (now - lastUpdateTime > 500) {
                                     lastUpdateTime = now
-                                    val totalDownloaded = segmentProgress.values.sum()
-                                    val totalSize = segments.size.toLong() * (segmentProgress.values.maxOrNull() ?: 0L)
-                                    val progress = if (totalSize > 0) (totalDownloaded.toFloat() / totalSize).coerceIn(0f, 1f) else 0f
+                                    val progress = count.toFloat() / segments.size
                                     serviceScope.launch {
                                         repository.updateTaskStatus(
                                             taskId,
                                             TaskStatus.DOWNLOADING,
                                             progress = progress,
-                                            downloaded = completedCount.get()
+                                            downloaded = count
                                         )
                                     }
                                 }
-                            }
-                            if (result.isSuccess) {
-                                completedCount.incrementAndGet()
-                                segmentProgress[segment.index] = segmentFile.length()
                             }
                             result
                         }
@@ -288,7 +286,9 @@ class DownloadService : Service() {
                     mergedFile.delete()
                     mp4File
                 } else {
-                    // 转码失败，保留 TS 文件
+                    // 转码失败，保留 TS 文件，记录错误
+                    val error = convertResult.exceptionOrNull()?.message ?: "未知错误"
+                    android.util.Log.e("DownloadService", "TS 转 MP4 失败: $error")
                     mergedFile
                 }
             } else {
@@ -346,7 +346,7 @@ class DownloadService : Service() {
             fileName,
             message
         )
-        startForeground(R.string.download_channel_name.hashCode(), notification)
+        startForeground(FOREGROUND_NOTIFICATION_ID, notification)
     }
 
     /**

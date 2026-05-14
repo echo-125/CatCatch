@@ -27,7 +27,17 @@ class FFmpegConverter {
         private const val TS_SYNC_BYTE = 0x47
     }
 
-    fun isAvailable(): Boolean = true
+    fun isAvailable(): Boolean {
+        // 检查设备是否支持 MediaExtractor 和 MediaMuxer
+        return try {
+            Class.forName("android.media.MediaExtractor")
+            Class.forName("android.media.MediaMuxer")
+            true
+        } catch (e: ClassNotFoundException) {
+            Log.w(TAG, "MediaExtractor/Muxer 不可用")
+            false
+        }
+    }
 
     /**
      * 将 TS 文件转换为 MP4
@@ -126,13 +136,20 @@ class FFmpegConverter {
 
                 Log.i(TAG, "转码完成: ${outputMp4File.name} (${outputMp4File.length()} bytes)")
             } catch (e: Exception) {
+                Log.e(TAG, "转码失败: ${e.message}", e)
                 if (outputMp4File.exists()) outputMp4File.delete()
                 throw e
             } finally {
                 try {
                     muxer?.stop()
+                } catch (e: Exception) {
+                    Log.w(TAG, "muxer.stop() 异常: ${e.message}")
+                }
+                try {
                     muxer?.release()
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.w(TAG, "muxer.release() 异常: ${e.message}")
+                }
                 extractor.release()
             }
 

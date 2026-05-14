@@ -1,11 +1,15 @@
 package com.catcatch.di
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.catcatch.data.local.AppDatabase
 import com.catcatch.data.local.TaskDao
 import com.catcatch.data.remote.M3U8Parser
 import com.catcatch.data.repository.DownloadRepository
+import com.catcatch.data.repository.SettingsRepository
 import com.catcatch.service.FFmpegConverter
 import com.catcatch.service.SegmentDownloader
 import dagger.Module
@@ -16,6 +20,8 @@ import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
+
+private val Context.dataStore by preferencesDataStore(name = "settings")
 
 /**
  * Hilt 依赖注入模块
@@ -99,5 +105,23 @@ object AppModule {
         m3u8Parser: M3U8Parser
     ): DownloadRepository {
         return DownloadRepository(taskDao, m3u8Parser)
+    }
+
+    /**
+     * 提供 DataStore
+     */
+    @Provides
+    @Singleton
+    fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> {
+        return context.dataStore
+    }
+
+    /**
+     * 提供 SettingsRepository
+     */
+    @Provides
+    @Singleton
+    fun provideSettingsRepository(dataStore: DataStore<Preferences>): SettingsRepository {
+        return SettingsRepository(dataStore)
     }
 }

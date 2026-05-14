@@ -113,6 +113,13 @@ class DownloadRepository(
     }
 
     /**
+     * 获取指定目录下所有任务的输出文件名（用于去重）
+     */
+    suspend fun getTaskOutputNames(outputDir: String): List<String> {
+        return taskDao.getOutputNamesByDir(outputDir)
+    }
+
+    /**
      * TaskEntity 转 DownloadTask
      */
     private fun TaskEntity.toDomain(): DownloadTask {

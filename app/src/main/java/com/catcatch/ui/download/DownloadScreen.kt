@@ -1,13 +1,14 @@
 package com.catcatch.ui.download
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,15 +18,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.Card
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -45,22 +52,53 @@ import com.catcatch.ui.task.TaskItem
 import com.catcatch.ui.theme.StatusCompleted
 import com.catcatch.ui.theme.StatusDownloading
 import com.catcatch.ui.theme.StatusFailed
-import com.catcatch.ui.theme.StatusPending
 
 /**
  * 下载列表页面
- * 支持横屏双面板布局
+ * 支持多选模式和批量操作
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val taskListState by viewModel.taskListState.collectAsState()
     val tasks = taskListState.tasks
-    var selectedTaskId by rememberSaveable { mutableStateOf<Long?>(null) }
-    val selectedTask = tasks.find { it.id == selectedTaskId }
+
+    // 多选模式状态
+    var isSelectionMode by rememberSaveable { mutableStateOf(false) }
+    var selectedIds by rememberSaveable { mutableStateOf(setOf<Long>()) }
+
+    // 退出多选模式
+    fun exitSelectionMode() {
+        isSelectionMode = false
+        selectedIds = emptySet()
+    }
+
+    // 切换选中状态
+    fun toggleSelection(taskId: Long) {
+        selectedIds = if (taskId in selectedIds) {
+            selectedIds - taskId
+        } else {
+            selectedIds + taskId
+        }
+        // 如果没有选中项，退出多选模式
+        if (selectedIds.isEmpty()) {
+            isSelectionMode = false
+        }
+    }
+
+    // 全选/取消全选
+    fun toggleSelectAll() {
+        selectedIds = if (selectedIds.size == tasks.size) {
+            emptySet()
+        } else {
+            tasks.map { it.id }.toSet()
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // 顶部标题栏 - 始终保持同一布局
         CatCatchTopAppBar(
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -72,62 +110,165 @@ fun DownloadScreen(
                 }
             },
             actions = {
-                IconButton(onClick = { viewModel.clearFinished() }) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = "清除已完成任务"
-                    )
+                if (isSelectionMode) {
+                    // 多选模式下的按钮
+                    TextButton(onClick = ::toggleSelectAll) {
+                        Icon(
+                            imageVector = Icons.Default.SelectAll,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (selectedIds.size == tasks.size) "取消全选" else "全选")
+                    }
+                    IconButton(onClick = ::exitSelectionMode) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "退出多选"
+                        )
+                    }
+                } else {
+                    // 普通模式下的按钮
+                    if (tasks.isNotEmpty()) {
+                        IconButton(onClick = { isSelectionMode = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Checklist,
+                                contentDescription = "多选"
+                            )
+                        }
+                    }
+                    IconButton(onClick = { viewModel.clearFinished() }) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = "清除已完成任务"
+                        )
+                    }
                 }
             }
         )
 
         if (tasks.isEmpty()) {
-            // 空状态
             EmptyState()
         } else {
             // 主内容区
-            Row(modifier = Modifier.fillMaxSize()) {
-                // 左侧任务列表
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    item { Spacer(modifier = Modifier.height(4.dp)) }
-                    items(
-                        items = tasks,
-                        key = { it.id }
-                    ) { task ->
-                        TaskItem(
-                            task = task,
-                            onDelete = { viewModel.deleteTask(task.id) },
-                            onCancel = { viewModel.cancelTask(task.id) },
-                            onRetry = { viewModel.retryTask(task.id) },
-                            onOpenFolder = { /* TODO: 打开目录 */ },
-                            onPlay = { /* TODO: 播放视频 */ }
-                        )
-                    }
-                    item { Spacer(modifier = Modifier.height(4.dp)) }
-                }
-
-                // 右侧详情面板（仅在有选中任务时显示）
-                if (selectedTask != null) {
-                    TaskDetailPanel(
-                        task = selectedTask,
-                        modifier = Modifier
-                            .width(320.dp)
-                            .fillMaxHeight()
-                            .padding(16.dp)
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item { Spacer(modifier = Modifier.height(4.dp)) }
+                items(
+                    items = tasks,
+                    key = { it.id }
+                ) { task ->
+                    TaskItem(
+                        task = task,
+                        isSelectionMode = isSelectionMode,
+                        isSelected = task.id in selectedIds,
+                        onDelete = { viewModel.deleteTask(task.id) },
+                        onCancel = { viewModel.cancelTask(task.id) },
+                        onRetry = { viewModel.retryTask(task.id) },
+                        onOpenFolder = { viewModel.openFolder(task) },
+                        onPlay = { viewModel.playVideo(task) },
+                        onLongClick = {
+                            if (!isSelectionMode) {
+                                isSelectionMode = true
+                                selectedIds = setOf(task.id)
+                            }
+                        },
+                        onClick = { toggleSelection(task.id) }
                     )
                 }
+                item { Spacer(modifier = Modifier.height(4.dp)) }
+            }
+        }
+
+        // 底部批量操作栏
+        AnimatedVisibility(
+            visible = isSelectionMode && selectedIds.isNotEmpty(),
+            enter = slideInVertically(initialOffsetY = { it }),
+            exit = slideOutVertically(targetOffsetY = { it })
+        ) {
+            BatchActionBar(
+                selectedTasks = tasks.filter { it.id in selectedIds },
+                onBatchRetry = {
+                    viewModel.batchRetry(selectedIds)
+                    exitSelectionMode()
+                },
+                onBatchDelete = {
+                    viewModel.batchDelete(selectedIds)
+                    exitSelectionMode()
+                }
+            )
+        }
+    }
+}
+
+/**
+ * 底部批量操作栏
+ */
+@Composable
+private fun BatchActionBar(
+    selectedTasks: List<DownloadTask>,
+    onBatchRetry: () -> Unit,
+    onBatchDelete: () -> Unit
+) {
+    // 判断是否所有选中任务都是可重试状态
+    val canRetry = selectedTasks.all {
+        it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PENDING)
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        tonalElevation = 3.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "已选 ${selectedTasks.size} 项",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+
+            if (canRetry) {
+                TextButton(onClick = onBatchRetry) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("批量开始")
+                }
+            }
+
+            TextButton(onClick = onBatchDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "批量删除",
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
     }
 }
 
 /**
- * 紧凑统计信息（标题右侧副标题形式）
+ * 紧凑统计信息
  */
 @Composable
 private fun CompactStats(tasks: List<DownloadTask>) {
@@ -204,88 +345,6 @@ private fun EmptyState() {
             text = "在主页添加 M3U8 链接开始下载",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-/**
- * 任务详情面板（横屏双面板右侧）
- */
-@Composable
-private fun TaskDetailPanel(
-    task: DownloadTask,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "任务详情",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            DetailItem("文件名", task.outputName)
-            DetailItem("状态", task.statusText)
-            DetailItem("URL", task.url)
-
-            if (task.fileSize > 0) {
-                DetailItem("文件大小", task.fileSizeText)
-            }
-
-            if (task.status == TaskStatus.DOWNLOADING) {
-                DetailItem("进度", task.progressText)
-                if (task.speedText.isNotEmpty()) {
-                    DetailItem("速度", task.speedText)
-                }
-                if (task.remainingTimeText.isNotEmpty()) {
-                    DetailItem("剩余时间", task.remainingTimeText)
-                }
-                if (task.total > 0) {
-                    DetailItem("分片", "${task.downloaded}/${task.total}")
-                }
-            }
-
-            if (task.status == TaskStatus.FAILED && task.message.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "错误信息",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
-                Text(
-                    text = task.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            if (task.outputPath.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                DetailItem("输出路径", task.outputPath)
-            }
-        }
-    }
-}
-
-@Composable
-private fun DetailItem(label: String, value: String) {
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2
         )
     }
 }

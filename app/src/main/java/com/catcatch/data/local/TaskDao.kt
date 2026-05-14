@@ -60,4 +60,10 @@ interface TaskDao {
      */
     @Query("SELECT * FROM tasks WHERE status = 'PENDING' ORDER BY createdAt ASC")
     suspend fun getPendingTasks(): List<TaskEntity>
+
+    /**
+     * 获取指定目录下所有任务的输出文件名
+     */
+    @Query("SELECT outputName FROM tasks WHERE outputDir = :outputDir")
+    suspend fun getOutputNamesByDir(outputDir: String): List<String>
 }

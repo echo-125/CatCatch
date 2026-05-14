@@ -1,7 +1,52 @@
 # M3U8 视频下载器 - 安卓版功能需求文档
 
-> 基于现有 Windows 桌面版（Python + ttkbootstrap）移植到安卓平台  
+> 基于现有 Windows 桌面版（Python + ttkbootstrap）移植到安卓平台
 > 更新：新增浏览器插件联动功能，支持外部唤起并一键添加下载任务
+
+## 实现状态总结（2025-05）
+
+### 已完成功能
+
+| 优先级 | 功能 | 状态 | 备注 |
+|--------|------|------|------|
+| P0 | M3U8 解析 | ✅ | 支持 Master Playlist 递归解析，多编码检测 |
+| P0 | 单任务下载 | ✅ | 已升级为协程并发下载 |
+| P0 | 基础 UI | ✅ | Jetpack Compose + Material 3 |
+| P0 | 分片合并 | ✅ | 二进制顺序合并 |
+| P0 | 下载完成通知 | ✅ | NotificationUtil |
+| P1 | 多线程并发下载 | ✅ | 协程 + Semaphore，默认 8 并发 |
+| P1 | 断点续传 | ✅ | 跳过已存在且非空的文件 |
+| P1 | 自动重试 | ✅ | 单分片 3 次指数退避 + 批量 3 轮重试 |
+| P1 | 多任务管理 | ✅ | 队列管理，最多 3 并发任务 |
+| P1 | 任务取消 | ✅ | 协作式取消 |
+| P2 | 主播放列表递归 | ✅ | 最大 5 层，自动选择最高码率 |
+| P2 | 批量添加任务 | ✅ | 格式：链接\|文件名 |
+| P2 | 自定义请求头 | ✅ | 输入框 + Repository 传递 |
+| P2 | FFmpeg 转码 | ✅ | Android MediaExtractor + MediaMuxer（非 ffmpeg-kit） |
+| P2 | 后台下载服务 | ✅ | Foreground Service |
+| P3 | 剪贴板粘贴 | ✅ | ContentPaste 按钮 |
+| P3 | 设置页面 | ⚠️ | 基础框架已实现，功能项为占位 |
+| P3 | 深色模式 | ⚠️ | Theme.kt 已支持，设置切换未实现 |
+| - | UI 重构 | ✅ | Teal 主题、响应式布局、组件样式优化 |
+
+### 待实现功能
+
+| 优先级 | 功能 | 说明 |
+|--------|------|------|
+| P2 | 浏览器插件联动 | URL Scheme 已定义，MainActivity intent-filter 未配置 |
+| P3 | 浏览器分享集成 | 接收 ACTION_SEND Intent |
+| P3 | 仅 WiFi 下载选项 | 需 DataStore 配置持久化 |
+| P3 | 静默添加模式 | URL Scheme 触发时跳过确认 |
+| - | 设置页功能实现 | 下载目录选择、并发数配置、深色模式切换 |
+| - | DataStore 配置持久化 | 替代硬编码的下载目录和并发数 |
+
+### 技术实现差异（与原 PRD）
+
+1. **转码方案**：使用 Android 原生 MediaExtractor + MediaMuxer，而非 ffmpeg-kit
+2. **并发模型**：使用 Kotlin Coroutines + Semaphore，而非线程池
+3. **后台下载**：使用自定义 Foreground Service，而非 WorkManager（已引入未使用）
+4. **UI 框架**：Jetpack Compose（非 XML），响应式布局（竖屏底部导航/横屏侧边栏）
+5. **状态管理**：StateFlow + SavedStateHandle（非 LiveData）
 
 ## 一、应用概述
 

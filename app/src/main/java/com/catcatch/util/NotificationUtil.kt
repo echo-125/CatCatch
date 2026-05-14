@@ -16,42 +16,7 @@ import java.io.File
  */
 object NotificationUtil {
 
-    private const val DOWNLOAD_NOTIFICATION_ID = 1001
     private const val COMPLETE_NOTIFICATION_ID = 1002
-    private const val ERROR_NOTIFICATION_ID = 1003
-
-    /**
-     * 显示下载进度通知
-     */
-    fun showDownloadProgress(
-        context: Context,
-        fileName: String,
-        progress: Int,
-        downloaded: Int,
-        total: Int
-    ) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(context, CatCatchApp.DOWNLOAD_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_download)
-            .setContentTitle(fileName)
-            .setContentText("下载进度: $progress% ($downloaded/$total)")
-            .setProgress(100, progress, false)
-            .setOngoing(true)
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-
-        notificationManager.notify(DOWNLOAD_NOTIFICATION_ID, notification)
-    }
 
     /**
      * 显示下载完成通知
@@ -89,45 +54,6 @@ object NotificationUtil {
             .build()
 
         notificationManager.notify(COMPLETE_NOTIFICATION_ID, notification)
-    }
-
-    /**
-     * 显示下载失败通知
-     */
-    fun showDownloadError(
-        context: Context,
-        fileName: String,
-        error: String
-    ) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(context, CatCatchApp.DOWNLOAD_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_error)
-            .setContentTitle("下载失败")
-            .setContentText(fileName)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(error))
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .build()
-
-        notificationManager.notify(ERROR_NOTIFICATION_ID, notification)
-    }
-
-    /**
-     * 取消下载进度通知
-     */
-    fun cancelDownloadNotification(context: Context) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(DOWNLOAD_NOTIFICATION_ID)
     }
 
     /**
