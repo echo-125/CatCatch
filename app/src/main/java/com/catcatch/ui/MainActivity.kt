@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
             if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
                 val title = intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: ""
                 val app = application as CatCatchApp
-                app.deepLinkChannel.trySend(DeepLinkData(url, title, emptyMap(), false))
+                app.pendingDeepLink = DeepLinkData(url, title, emptyMap(), false)
             }
             return
         }
@@ -98,14 +98,14 @@ class MainActivity : ComponentActivity() {
                 val headers = parseHeadersJson(headersParam)
                 val silent = uri.getQueryParameter("silent") == "true"
                 val app = application as CatCatchApp
-                app.deepLinkChannel.trySend(DeepLinkData(url, title, headers, silent))
+                app.pendingDeepLink = DeepLinkData(url, title, headers, silent)
             }
             "http", "https" -> {
                 val url = uri.toString()
                 if (!url.endsWith(".m3u8", ignoreCase = true) &&
                     !url.contains(".m3u8?", ignoreCase = true)) return
                 val app = application as CatCatchApp
-                app.deepLinkChannel.trySend(DeepLinkData(url, "", emptyMap(), false))
+                app.pendingDeepLink = DeepLinkData(url, "", emptyMap(), false)
             }
         }
     }

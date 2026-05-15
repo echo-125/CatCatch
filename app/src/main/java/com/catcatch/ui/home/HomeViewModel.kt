@@ -84,10 +84,15 @@ class HomeViewModel @Inject constructor(
                 currentDownloadDir = dir
             }
         }
-        // 收集 Deep Link 数据（Channel 一次性消费，不会重复）
+        // 处理待处理的 Deep Link 数据
         viewModelScope.launch {
             val app = context.applicationContext as CatCatchApp
-            app.deepLinkChannel.receiveAsFlow().collect { data ->
+            // 延迟一小段时间等待 UI 准备好
+            kotlinx.coroutines.delay(100)
+            val data = app.pendingDeepLink
+            if (data != null) {
+                // 清除待处理数据，避免重复处理
+                app.pendingDeepLink = null
                 // 读取静默模式设置（全局设置优先，忽略 URL 参数）
                 val globalSilentMode = settingsRepository.silentMode.first()
 

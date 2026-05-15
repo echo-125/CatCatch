@@ -40,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import com.catcatch.ui.components.ExpandableSection
 
 /**
@@ -50,7 +49,7 @@ import com.catcatch.ui.components.ExpandableSection
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    viewModel: HomeViewModel = hiltViewModel()
+    viewModel: HomeViewModel
 ) {
     val inputState by viewModel.inputState.collectAsState()
     val uiEvent by viewModel.uiEventState.collectAsState()

@@ -27,6 +27,7 @@ fun MainScreen(
     val navController = rememberNavController()
     val tabs = listOf(Screen.Home, Screen.Downloads, Screen.Settings)
 
+    // 共享 ViewModel，避免重复创建导致 Deep Link 数据被多次处理
     val sharedViewModel: HomeViewModel = hiltViewModel()
     val taskListState by sharedViewModel.taskListState.collectAsState()
     val activeTaskCount = taskListState.tasks.count {
@@ -44,8 +45,8 @@ fun MainScreen(
             startDestination = Screen.Home.route,
             modifier = Modifier.fillMaxSize()
         ) {
-            composable(Screen.Home.route) { HomeScreen() }
-            composable(Screen.Downloads.route) { DownloadScreen() }
+            composable(Screen.Home.route) { HomeScreen(viewModel = sharedViewModel) }
+            composable(Screen.Downloads.route) { DownloadScreen(viewModel = sharedViewModel) }
             composable(Screen.Settings.route) { SettingsScreen() }
         }
     }

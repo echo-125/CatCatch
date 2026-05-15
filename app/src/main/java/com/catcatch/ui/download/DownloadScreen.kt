@@ -43,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import com.catcatch.domain.model.DownloadTask
 import com.catcatch.domain.model.TaskStatus
 import com.catcatch.ui.components.CatCatchTopAppBar
@@ -60,7 +59,7 @@ import com.catcatch.ui.theme.StatusFailed
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadScreen(
-    viewModel: HomeViewModel = hiltViewModel()
+    viewModel: HomeViewModel
 ) {
     val taskListState by viewModel.taskListState.collectAsState()
     val tasks = taskListState.tasks

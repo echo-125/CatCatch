@@ -11,8 +11,6 @@ import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -39,8 +37,9 @@ class CatCatchApp : Application() {
     @Inject
     lateinit var downloadRepository: DownloadRepository
 
-    // Deep Link 数据通道，一次性消费，避免重复处理
-    val deepLinkChannel = Channel<DeepLinkData>(Channel.BUFFERED)
+    // 待处理的 Deep Link 数据（一次性消费）
+    @Volatile
+    var pendingDeepLink: DeepLinkData? = null
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
