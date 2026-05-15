@@ -5,6 +5,8 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.util.Log
+import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.ReturnCode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -15,9 +17,15 @@ import java.nio.ByteOrder
 
 /**
  * 视频转码服务
- * 方案1: MediaExtractor + MediaMuxer（带重试）
- * 方案2: getExternalFilesDir + MediaExtractor（不同 SELinux 上下文）
- * 方案3: 纯手写 TS→MP4 muxer（不依赖 mediaserver）
+ * 支持三种转码后端：
+ * - FFmpeg-kit: 使用 ffmpeg 命令行，兼容性最好
+ * - MediaExtractor + MediaMuxer: Android 原生，速度快
+ * - 手写 muxer: 纯 Java 实现，不依赖系统服务
+ *
+ * 转码模式 (transcodeMode):
+ * - 0 = 自动: 系统原生优先，失败时使用 FFmpeg-kit
+ * - 1 = FFmpeg-kit: 仅使用 FFmpeg-kit
+ * - 2 = 系统原生: 仅使用 MediaExtractor + 手写 muxer
  */
 class FFmpegConverter {
 
@@ -29,7 +37,18 @@ class FFmpegConverter {
         private const val EXTRACTOR_RETRY_DELAY_MS = 1000L
     }
 
-    fun isAvailable(): Boolean {
+    /**
+     * 检查指定模式的转码是否可用
+     */
+    fun isAvailable(transcodeMode: Int = 0): Boolean {
+        return when (transcodeMode) {
+            1 -> isFFmpegKitAvailable()
+            2 -> isMediaExtractorAvailable()
+            else -> isMediaExtractorAvailable() || isFFmpegKitAvailable()
+        }
+    }
+
+    private fun isMediaExtractorAvailable(): Boolean {
         return try {
             Class.forName("android.media.MediaExtractor")
             Class.forName("android.media.MediaMuxer")
@@ -39,66 +58,126 @@ class FFmpegConverter {
         }
     }
 
+    private fun isFFmpegKitAvailable(): Boolean {
+        return try {
+            Class.forName("com.arthenica.ffmpegkit.FFmpegKit")
+            true
+        } catch (e: ClassNotFoundException) {
+            false
+        }
+    }
+
     /**
      * 将 TS 文件转换为 MP4
+     * @param transcodeMode 转码模式: 0=自动, 1=FFmpeg-kit, 2=系统原生
      */
     suspend fun convertTsToMp4(
         inputTsFile: File,
         outputMp4File: File,
-        externalFilesDir: File? = null
+        externalFilesDir: File? = null,
+        transcodeMode: Int = 0
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             if (!inputTsFile.exists()) throw Exception("输入文件不存在")
             if (inputTsFile.length() < MIN_VALID_TS_SIZE) throw Exception("输入文件过小")
 
-            Log.i(TAG, "开始转码: ${inputTsFile.name} (${inputTsFile.length()} bytes)")
+            Log.i(TAG, "开始转码: ${inputTsFile.name} (${inputTsFile.length()} bytes), 模式=$transcodeMode")
             if (outputMp4File.exists()) outputMp4File.delete()
 
-            // 方案 1: MediaExtractor
-            val extractor = createInitializedExtractor(inputTsFile)
-            if (extractor != null) {
-                try {
-                    convertWithExtractor(extractor, inputTsFile, outputMp4File)
-                    return@runCatching
-                } catch (e: Exception) {
-                    Log.e(TAG, "MediaExtractor 转码失败: ${e.message}")
-                    if (outputMp4File.exists()) outputMp4File.delete()
-                } finally {
-                    extractor.release()
+            when (transcodeMode) {
+                1 -> {
+                    convertWithFFmpegKit(inputTsFile, outputMp4File)
                 }
-            }
-
-            // 方案 2: 复制到 getExternalFilesDir 再试
-            if (externalFilesDir != null && !inputTsFile.absolutePath.startsWith(externalFilesDir.absolutePath)) {
-                Log.i(TAG, "尝试复制到 getExternalFilesDir 再转码...")
-                val altFile = File(externalFilesDir, inputTsFile.name)
-                try {
-                    if (!altFile.parentFile?.exists()!!) altFile.parentFile?.mkdirs()
-                    inputTsFile.copyTo(altFile, overwrite = true)
-                    val altExtractor = createInitializedExtractor(altFile)
-                    if (altExtractor != null) {
-                        try {
-                            convertWithExtractor(altExtractor, altFile, outputMp4File)
-                            return@runCatching
-                        } catch (e: Exception) {
-                            Log.e(TAG, "外部目录 MediaExtractor 也失败: ${e.message}")
-                            if (outputMp4File.exists()) outputMp4File.delete()
-                        } finally {
-                            altExtractor.release()
-                        }
+                2 -> {
+                    convertWithMediaExtractorPipeline(inputTsFile, outputMp4File, externalFilesDir)
+                }
+                else -> {
+                    // 自动: 系统原生优先，FFmpeg-kit 兜底
+                    val nativeResult = runCatching {
+                        convertWithMediaExtractorPipeline(inputTsFile, outputMp4File, externalFilesDir)
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "复制到外部目录失败: ${e.message}")
-                } finally {
-                    altFile.delete()
+                    if (nativeResult.isFailure) {
+                        Log.w(TAG, "系统原生转码失败，尝试 FFmpeg-kit: ${nativeResult.exceptionOrNull()?.message}")
+                        if (outputMp4File.exists()) outputMp4File.delete()
+                        convertWithFFmpegKit(inputTsFile, outputMp4File)
+                    }
                 }
             }
-
-            // 方案 3: 纯手写 TS→MP4 muxer
-            Log.i(TAG, "尝试纯手写 TS→MP4 muxer...")
-            convertWithManualMuxer(inputTsFile, outputMp4File)
-            Log.i(TAG, "手写 muxer 转码完成: ${outputMp4File.length()} bytes")
         }
+    }
+
+    /**
+     * FFmpeg-kit 转码: -c copy 直接复制流，速度快兼容性好
+     */
+    private fun convertWithFFmpegKit(inputTsFile: File, outputMp4File: File) {
+        Log.i(TAG, "使用 FFmpeg-kit 转码...")
+        val cmd = "-y -i \"${inputTsFile.absolutePath}\" -c copy -movflags +faststart \"${outputMp4File.absolutePath}\""
+        val session = FFmpegKit.execute(cmd)
+
+        if (!ReturnCode.isSuccess(session.returnCode)) {
+            val logs = session.allLogsAsString
+            Log.e(TAG, "FFmpeg-kit 失败: code=${session.returnCode}, logs=$logs")
+            throw Exception("FFmpeg-kit 转码失败: ${session.returnCode}")
+        }
+
+        if (!outputMp4File.exists() || outputMp4File.length() < 1024) {
+            throw Exception("FFmpeg-kit 输出文件无效")
+        }
+        Log.i(TAG, "FFmpeg-kit 转码完成: ${outputMp4File.length()} bytes")
+    }
+
+    /**
+     * 系统原生转码管线: MediaExtractor → 外部目录重试 → 手写 muxer
+     */
+    private fun convertWithMediaExtractorPipeline(
+        inputTsFile: File,
+        outputMp4File: File,
+        externalFilesDir: File?
+    ) {
+        // 方案 1: MediaExtractor
+        val extractor = createInitializedExtractor(inputTsFile)
+        if (extractor != null) {
+            try {
+                convertWithExtractor(extractor, inputTsFile, outputMp4File)
+                return
+            } catch (e: Exception) {
+                Log.e(TAG, "MediaExtractor 转码失败: ${e.message}")
+                if (outputMp4File.exists()) outputMp4File.delete()
+            } finally {
+                extractor.release()
+            }
+        }
+
+        // 方案 2: 复制到 getExternalFilesDir 再试
+        if (externalFilesDir != null && !inputTsFile.absolutePath.startsWith(externalFilesDir.absolutePath)) {
+            Log.i(TAG, "尝试复制到 getExternalFilesDir 再转码...")
+            val altFile = File(externalFilesDir, inputTsFile.name)
+            try {
+                if (!altFile.parentFile?.exists()!!) altFile.parentFile?.mkdirs()
+                inputTsFile.copyTo(altFile, overwrite = true)
+                val altExtractor = createInitializedExtractor(altFile)
+                if (altExtractor != null) {
+                    try {
+                        convertWithExtractor(altExtractor, altFile, outputMp4File)
+                        return
+                    } catch (e: Exception) {
+                        Log.e(TAG, "外部目录 MediaExtractor 也失败: ${e.message}")
+                        if (outputMp4File.exists()) outputMp4File.delete()
+                    } finally {
+                        altExtractor.release()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "复制到外部目录失败: ${e.message}")
+            } finally {
+                altFile.delete()
+            }
+        }
+
+        // 方案 3: 纯手写 TS→MP4 muxer
+        Log.i(TAG, "尝试纯手写 TS→MP4 muxer...")
+        convertWithManualMuxer(inputTsFile, outputMp4File)
+        Log.i(TAG, "手写 muxer 转码完成: ${outputMp4File.length()} bytes")
     }
 
     private fun createInitializedExtractor(file: File): MediaExtractor? {

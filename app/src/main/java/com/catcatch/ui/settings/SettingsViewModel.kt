@@ -24,7 +24,8 @@ data class SettingsState(
     val useDirPicker: Boolean = AppPreferences.DEFAULT_USE_DIR_PICKER,
     val maxConcurrentTasks: Int = AppPreferences.DEFAULT_MAX_CONCURRENT_TASKS,
     val maxConcurrentSegments: Int = AppPreferences.DEFAULT_MAX_CONCURRENT_SEGMENTS,
-    val darkMode: Int = AppPreferences.DEFAULT_DARK_MODE
+    val darkMode: Int = AppPreferences.DEFAULT_DARK_MODE,
+    val transcodeMode: Int = AppPreferences.DEFAULT_TRANSCODE_MODE
 )
 
 /**
@@ -80,6 +81,11 @@ class SettingsViewModel @Inject constructor(
                     _state.update { it.copy(darkMode = value) }
                 }
             }
+            launch {
+                settingsRepository.transcodeMode.collect { value ->
+                    _state.update { it.copy(transcodeMode = value) }
+                }
+            }
         }
     }
 
@@ -119,6 +125,10 @@ class SettingsViewModel @Inject constructor(
 
     fun updateDarkMode(value: Int) {
         viewModelScope.launch { settingsRepository.setDarkMode(value) }
+    }
+
+    fun updateTranscodeMode(value: Int) {
+        viewModelScope.launch { settingsRepository.setTranscodeMode(value) }
     }
 
     /**

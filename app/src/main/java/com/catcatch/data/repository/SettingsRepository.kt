@@ -40,6 +40,10 @@ class SettingsRepository @Inject constructor(
         it[AppPreferences.DARK_MODE] ?: AppPreferences.DEFAULT_DARK_MODE
     }
 
+    val transcodeMode: Flow<Int> = dataStore.data.map {
+        it[AppPreferences.TRANSCODE_MODE] ?: AppPreferences.DEFAULT_TRANSCODE_MODE
+    }
+
     suspend fun setDownloadDir(value: String) {
         dataStore.edit { it[AppPreferences.DOWNLOAD_DIR] = value }
     }
@@ -68,5 +72,9 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setDarkMode(value: Int) {
         dataStore.edit { it[AppPreferences.DARK_MODE] = value }
+    }
+
+    suspend fun setTranscodeMode(value: Int) {
+        dataStore.edit { it[AppPreferences.TRANSCODE_MODE] = value }
     }
 }

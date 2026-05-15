@@ -18,3 +18,7 @@
 
 # Kotlin Coroutines
 -keep class kotlinx.coroutines.** { *; }
+
+# FFmpeg-kit
+-keep class com.arthenica.** { *; }
+-dontwarn com.arthenica.**

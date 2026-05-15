@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.VideoSettings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -81,6 +82,7 @@ fun SettingsScreen(
     var showConcurrentTasksDialog by remember { mutableStateOf(false) }
     var showConcurrentSegmentsDialog by remember { mutableStateOf(false) }
     var showDarkModeDialog by remember { mutableStateOf(false) }
+    var showTranscodeModeDialog by remember { mutableStateOf(false) }
     var showDirMethodDialog by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
 
@@ -153,6 +155,12 @@ fun SettingsScreen(
                         title = "每任务并发分片数",
                         subtitle = "${state.maxConcurrentSegments}",
                         onClick = { showConcurrentSegmentsDialog = true }
+                    )
+                    SettingsItem(
+                        icon = Icons.Default.VideoSettings,
+                        title = "转码模式",
+                        subtitle = transcodeModeLabel(state.transcodeMode),
+                        onClick = { showTranscodeModeDialog = true }
                     )
                 }
             }
@@ -395,6 +403,61 @@ fun SettingsScreen(
         )
     }
 
+    // 转码模式对话框
+    if (showTranscodeModeDialog) {
+        val options = listOf(
+            0 to "自动（推荐）",
+            1 to "FFmpeg-kit",
+            2 to "系统原生"
+        )
+        var selected by remember { mutableIntStateOf(state.transcodeMode) }
+        AlertDialog(
+            onDismissRequest = { showTranscodeModeDialog = false },
+            title = { Text("转码模式") },
+            text = {
+                Column {
+                    Text(
+                        text = "选择 TS→MP4 转码方式",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    options.forEach { (value, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = selected == value,
+                                    onClick = { selected = value }
+                                )
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = selected == value,
+                                onClick = { selected = value }
+                            )
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.updateTranscodeMode(selected)
+                    showTranscodeModeDialog = false
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTranscodeModeDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
     // 深色模式对话框
     if (showDarkModeDialog) {
         val options = listOf(0 to "跟随系统", 1 to "浅色", 2 to "深色")
@@ -445,6 +508,12 @@ private fun darkModeLabel(mode: Int): String = when (mode) {
     1 -> "浅色"
     2 -> "深色"
     else -> "跟随系统"
+}
+
+private fun transcodeModeLabel(mode: Int): String = when (mode) {
+    1 -> "FFmpeg-kit"
+    2 -> "系统原生"
+    else -> "自动（推荐）"
 }
 
 @Composable

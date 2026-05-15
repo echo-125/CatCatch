@@ -18,6 +18,10 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -90,4 +94,8 @@ dependencies {
 
     // DocumentFile (SAF)
     implementation(libs.documentfile)
+
+    // FFmpeg-kit (本地 AAR，包含预编译 native 库)
+    implementation(files("libs/ffmpeg-kit-full-6.0-2.LTS.aar"))
+    implementation("com.arthenica:smart-exception-java:0.2.1")
 }

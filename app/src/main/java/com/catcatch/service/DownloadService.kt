@@ -281,9 +281,10 @@ class DownloadService : Service() {
             )
 
             // 启动后台转码（不阻塞任务队列）
-            if (ffmpegConverter.isAvailable()) {
+            val transcodeMode = settingsRepository.transcodeMode.first()
+            if (ffmpegConverter.isAvailable(transcodeMode)) {
                 val transcodeJob = serviceScope.launch {
-                    transcodeAndSave(taskId, task.outputName, mergedFile, downloadDir, useSaf, safUriString)
+                    transcodeAndSave(taskId, task.outputName, mergedFile, downloadDir, useSaf, safUriString, transcodeMode)
                     transcodeJobs.remove(taskId)
                     updateForegroundNotification()
                     stopSelfIfIdle()
@@ -312,7 +313,8 @@ class DownloadService : Service() {
         mergedFile: File,
         downloadDir: File,
         useSaf: Boolean,
-        safUriString: String?
+        safUriString: String?,
+        transcodeMode: Int = 0
     ) {
         try {
             repository.updateTaskStatus(taskId, TaskStatus.TRANSCODING, message = "转码中...")
@@ -320,7 +322,7 @@ class DownloadService : Service() {
 
             val mp4File = File(downloadDir, "$outputName.mp4")
             val externalDir = getExternalFilesDir("transcode")
-            val convertResult = ffmpegConverter.convertTsToMp4(mergedFile, mp4File, externalDir)
+            val convertResult = ffmpegConverter.convertTsToMp4(mergedFile, mp4File, externalDir, transcodeMode)
 
             if (convertResult.isSuccess) {
                 mergedFile.delete()
@@ -329,16 +331,23 @@ class DownloadService : Service() {
                 } else {
                     mp4File.absolutePath
                 }
+                repository.updateTaskStatus(
+                    taskId, TaskStatus.COMPLETED,
+                    progress = 1f, message = "转码完成"
+                )
                 NotificationUtil.showDownloadComplete(this, outputName, savedPath)
             } else {
                 val error = convertResult.exceptionOrNull()?.message ?: "转码未知错误"
                 android.util.Log.e("DownloadService", "转码失败: $error")
-                // 转码失败，保留 TS 文件
+                // 转码失败，保留 TS 文件，复制到 SAF
                 if (useSaf) {
-                    copyAndCleanup(mergedFile, outputName, safUriString!!, downloadDir)
+                    val savedPath = copyAndCleanup(mergedFile, outputName, safUriString!!, downloadDir)
+                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error")
+                    NotificationUtil.showDownloadComplete(this, outputName, savedPath)
+                } else {
+                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error")
+                    NotificationUtil.showDownloadComplete(this, outputName, mergedFile.absolutePath)
                 }
-                repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error")
-                NotificationUtil.showDownloadComplete(this, outputName, mergedFile.absolutePath)
             }
         } catch (e: Exception) {
             android.util.Log.e("DownloadService", "转码异常", e)
@@ -353,8 +362,10 @@ class DownloadService : Service() {
         return try {
             val safUri = Uri.parse(safUriString)
             val result = copyFileToSaf(sourceFile, outputName, safUri)
-            sourceFile.delete()
-            downloadDir.deleteRecursively()
+            if (result.startsWith("已保存")) {
+                sourceFile.delete()
+                downloadDir.deleteRecursively()
+            }
             result
         } catch (e: Exception) {
             android.util.Log.e("DownloadService", "复制到 SAF 目录失败", e)
