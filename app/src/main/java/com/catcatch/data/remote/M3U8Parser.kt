@@ -150,20 +150,28 @@ class M3U8Parser(private val client: OkHttpClient) {
                     val attrs = parseAttributes(trimmedLine.substringAfter(":"))
                     val method = attrs["METHOD"]
 
-                    if (method == "NONE") {
-                        currentMethod = null
-                        currentKeyUri = null
-                        currentIv = null
-                        Log.d(TAG, "加密已禁用 (METHOD=NONE)")
-                    } else if (method == "AES-128" || method == "SAMPLE-AES") {
-                        currentMethod = method
-                        currentKeyUri = attrs["URI"]?.let { uri ->
-                            // 去掉引号
-                            val cleanUri = uri.removeSurrounding("\"")
-                            resolveUrl(cleanUri, baseUrl)
+                    when (method) {
+                        "NONE" -> {
+                            currentMethod = null
+                            currentKeyUri = null
+                            currentIv = null
+                            Log.d(TAG, "加密已禁用 (METHOD=NONE)")
                         }
-                        currentIv = attrs["IV"]?.let { parseIv(it) }
-                        Log.d(TAG, "检测到加密: method=$method, keyUri=$currentKeyUri, iv=${currentIv != null}")
+                        "AES-128" -> {
+                            currentMethod = method
+                            currentKeyUri = attrs["URI"]?.let { uri ->
+                                val cleanUri = uri.removeSurrounding("\"")
+                                resolveUrl(cleanUri, baseUrl)
+                            }
+                            currentIv = attrs["IV"]?.let { parseIv(it) }
+                            Log.d(TAG, "检测到 AES-128 加密: keyUri=$currentKeyUri, iv=${currentIv != null}")
+                        }
+                        "SAMPLE-AES" -> {
+                            throw Exception("不支持 SAMPLE-AES 加密（样本级加密需要专用解密器），请使用普通 AES-128 加密流")
+                        }
+                        else -> {
+                            Log.w(TAG, "未知加密方法: $method，跳过")
+                        }
                     }
                 }
 

@@ -406,7 +406,7 @@ class DownloadService : Service() {
                 val segmentFile = File(downloadDir, "segment_$i.ts")
                 if (segmentFile.exists()) {
                     segmentFile.inputStream().use { input ->
-                        input.copyTo(output)
+                        input.copyTo(output, bufferSize = 256 * 1024)
                     }
                 }
             }
@@ -429,7 +429,7 @@ class DownloadService : Service() {
         try {
             contentResolver.openOutputStream(targetFile.uri)?.use { output ->
                 sourceFile.inputStream().use { input ->
-                    input.copyTo(output)
+                    input.copyTo(output, bufferSize = 256 * 1024)
                 }
             }
         } catch (e: Exception) {

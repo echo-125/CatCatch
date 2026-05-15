@@ -11,18 +11,20 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import javax.crypto.Cipher
+import javax.crypto.CipherInputStream
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.coroutineContext
 
 /**
  * 分片下载器
- * 支持单分片下载、进度回调、取消支持、AES-128-CBC 解密
+ * 支持单分片下载、进度回调、取消支持、AES-128-CBC 流式解密
  */
 class SegmentDownloader(private val client: OkHttpClient) {
 
     companion object {
         private const val TAG = "SegmentDownloader"
+        private const val BUFFER_SIZE = 8192
     }
 
     // 密钥缓存：keyUri -> 16 字节密钥
@@ -53,13 +55,13 @@ class SegmentDownloader(private val client: OkHttpClient) {
             val contentLength = body.contentLength()
 
             if (segment.isEncrypted && segment.keyUri != null) {
-                // 加密分片：下载到内存后解密再写入文件
-                downloadAndDecrypt(segment, body.byteStream().readBytes(), outputFile, onProgress, contentLength, headers)
+                // 加密分片：CipherInputStream 流式解密写入
+                downloadAndDecryptStream(segment, body.byteStream(), outputFile, onProgress, contentLength, headers)
             } else {
                 // 非加密分片：直接流式写入
                 body.byteStream().use { inputStream ->
                     FileOutputStream(outputFile).use { outputStream ->
-                        val buffer = ByteArray(8192)
+                        val buffer = ByteArray(BUFFER_SIZE)
                         var downloaded = 0L
                         var bytesRead: Int
 
@@ -76,36 +78,45 @@ class SegmentDownloader(private val client: OkHttpClient) {
     }
 
     /**
-     * 下载加密分片并解密
+     * 流式下载加密分片并解密
+     * 使用 CipherInputStream 边下载边解密，避免整个分片加载到内存
      */
-    private suspend fun downloadAndDecrypt(
+    private suspend fun downloadAndDecryptStream(
         segment: Segment,
-        encryptedData: ByteArray,
+        encryptedStream: java.io.InputStream,
         outputFile: File,
         onProgress: (Long, Long) -> Unit,
         contentLength: Long,
         headers: Map<String, String> = emptyMap()
     ) {
         val keyUri = segment.keyUri!!
-        Log.d(TAG, "下载加密分片 #${segment.index}: ${encryptedData.size} bytes, keyUri=$keyUri")
+        Log.d(TAG, "下载加密分片 #${segment.index}（流式解密）: keyUri=$keyUri")
 
-        onProgress(encryptedData.size.toLong() / 2, contentLength)
-
-        // 获取密钥（带缓存），传递请求头以便访问受保护的密钥 URL
+        // 获取密钥（带缓存）
         val key = getOrFetchKey(keyUri, headers)
 
-        onProgress(encryptedData.size.toLong(), contentLength)
-
-        // AES-128-CBC 解密
+        // AES-128-CBC 解密，PKCS5Padding 自动处理填充
         val iv = segment.iv ?: throw Exception("加密分片缺少 IV")
-        val decrypted = decryptAes128Cbc(encryptedData, key, iv)
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
 
-        Log.d(TAG, "解密完成: ${encryptedData.size} -> ${decrypted.size} bytes")
+        // CipherInputStream 流式解密：边读取边解密边写入，内存占用恒定
+        CipherInputStream(encryptedStream, cipher).use { decryptStream ->
+            FileOutputStream(outputFile).use { outputStream ->
+                val buffer = ByteArray(BUFFER_SIZE)
+                var downloaded = 0L
+                var bytesRead: Int
 
-        // 去除 PKCS7 填充（可能有 0-16 字节填充）
-        val trimmed = removePkcs7Padding(decrypted)
+                while (decryptStream.read(buffer).also { bytesRead = it } != -1) {
+                    coroutineContext.ensureActive()
+                    outputStream.write(buffer, 0, bytesRead)
+                    downloaded += bytesRead
+                    onProgress(downloaded, contentLength)
+                }
+            }
+        }
 
-        FileOutputStream(outputFile).use { it.write(trimmed) }
+        Log.d(TAG, "加密分片 #${segment.index} 流式解密完成")
     }
 
     /**
@@ -129,35 +140,6 @@ class SegmentDownloader(private val client: OkHttpClient) {
         keyCache[keyUri] = keyBytes
         Log.d(TAG, "密钥已缓存: ${keyBytes.size} bytes")
         return keyBytes
-    }
-
-    /**
-     * AES-128-CBC 解密
-     */
-    private fun decryptAes128Cbc(data: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
-        val secretKey = SecretKeySpec(key, "AES")
-        val ivSpec = IvParameterSpec(iv)
-        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-        cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-        return cipher.doFinal(data)
-    }
-
-    /**
-     * 去除 PKCS7 填充
-     */
-    private fun removePkcs7Padding(data: ByteArray): ByteArray {
-        if (data.isEmpty()) return data
-        val lastByte = data[data.size - 1].toInt() and 0xFF
-        if (lastByte in 1..16) {
-            // 验证填充
-            val paddingValid = (data.size - lastByte until data.size).all {
-                (data[it].toInt() and 0xFF) == lastByte
-            }
-            if (paddingValid) {
-                return data.copyOf(data.size - lastByte)
-            }
-        }
-        return data
     }
 
     suspend fun downloadWithRetry(

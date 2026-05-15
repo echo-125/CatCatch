@@ -20,7 +20,7 @@ import java.nio.ByteOrder
  * 支持三种转码后端：
  * - FFmpeg-kit: 使用 ffmpeg 命令行，兼容性最好
  * - MediaExtractor + MediaMuxer: Android 原生，速度快
- * - 手写 muxer: 纯 Java 实现，不依赖系统服务
+ * - 手写 muxer: 纯 Java 实现，不依赖系统服务，支持 PTS/DTS 重写
  *
  * 转码模式 (transcodeMode):
  * - 0 = 自动: 系统原生优先，失败时使用 FFmpeg-kit
@@ -35,6 +35,8 @@ class FFmpegConverter {
         private const val MAX_BUFFER_SIZE = 1024 * 1024
         private const val EXTRACTOR_MAX_RETRIES = 2
         private const val EXTRACTOR_RETRY_DELAY_MS = 1000L
+        private const val DEFAULT_TIMESCALE = 90000L
+        private const val DEFAULT_FRAME_DURATION = 3000L // 30fps: 90000/30
     }
 
     /**
@@ -178,7 +180,7 @@ class FFmpegConverter {
     }
 
     /**
-     * 系统原生转码管线: MediaExtractor → 外部目录重试 → 手写 muxer
+     * 系统原生转码管线: MediaExtractor → 外部目录重试 → 手写 muxer（支持 PTS 重写）
      */
     private fun convertWithMediaExtractorPipeline(
         inputTsFile: File,
@@ -225,8 +227,8 @@ class FFmpegConverter {
             }
         }
 
-        // 方案 3: 纯手写 TS→MP4 muxer
-        Log.i(TAG, "尝试纯手写 TS→MP4 muxer...")
+        // 方案 3: 纯手写 TS→MP4 muxer（支持 PTS 重写）
+        Log.i(TAG, "尝试纯手写 TS→MP4 muxer（PTS 重写模式）...")
         convertWithManualMuxer(inputTsFile, outputMp4File)
         Log.i(TAG, "手写 muxer 转码完成: ${outputMp4File.length()} bytes")
     }
@@ -321,11 +323,12 @@ class FFmpegConverter {
         }
     }
 
-    // ===== 方案 3: 纯手写 TS→MP4 muxer =====
+    // ===== 方案 3: 纯手写 TS→MP4 muxer（支持 PTS 重写）=====
 
     /**
      * 手写 TS→MP4 muxer：直接扫描原始字节找 H.264 NAL，手动构建 MP4 容器
-     * 完全不依赖 MediaExtractor / mediaserver，不依赖 TS 包解析
+     * 完全不依赖 MediaExtractor / mediaserver
+     * 支持从 TS 提取 PTS/DTS 时间戳，重写为连续的 MP4 时间线
      */
     private fun convertWithManualMuxer(inputTsFile: File, outputMp4File: File) {
         // 第一遍：扫描原始字节提取 SPS/PPS
@@ -335,16 +338,167 @@ class FFmpegConverter {
         }
         Log.i(TAG, "手写 muxer: SPS=${sps.size} bytes, PPS=${pps.size} bytes")
 
-        // 第二遍：扫描原始字节提取视频切片 NAL 到临时文件
+        // 从 SPS 解析分辨率
+        val (width, height) = parseSpsResolution(sps)
+        Log.i(TAG, "手写 muxer: 解析分辨率 ${width}x${height}")
+
+        // 第二遍：扫描原始字节提取视频切片 NAL 和 PTS 到临时文件
         val tempFile = File.createTempFile("annexb_", ".h264")
         try {
-            val (frames, idrIndices) = extractRawNalToFile(inputTsFile, tempFile)
+            val (frames, idrIndices) = extractRawNalWithPts(inputTsFile, tempFile)
             if (frames.isEmpty()) throw Exception("手写 muxer: 未能提取视频帧")
             Log.i(TAG, "手写 muxer: ${frames.size} 帧, ${idrIndices.size} 个 IDR, Annex B: ${tempFile.length()} bytes")
 
-            writeMp4(tempFile, frames, idrIndices, sps, pps, outputMp4File)
+            writeMp4(tempFile, frames, idrIndices, sps, pps, outputMp4File, width, height)
         } finally {
             tempFile.delete()
+        }
+    }
+
+    /**
+     * 从 SPS 解析视频分辨率
+     * 解析 pic_width_in_mbs_minus1 和 pic_height_in_map_units_minus1
+     * 考虑帧裁剪（crop_* 字段）
+     */
+    private fun parseSpsResolution(sps: ByteArray): Pair<Int, Int> {
+        try {
+            val reader = BitReader(sps)
+
+            // 跳过 forbidden_zero_bit (1) + nal_ref_idc (2) + nal_unit_type (5)
+            reader.readBits(8)
+
+            // profile_idc (8)
+            val profileIdc = reader.readBits(8)
+
+            // constraint_set0-5_flag (6) + reserved_zero_2bits (2)
+            reader.readBits(8)
+
+            // level_idc (8)
+            reader.readBits(8)
+
+            // seq_parameter_set_id (ue(v))
+            reader.readExpGolomb()
+
+            // 高 profile 额外解析
+            if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 ||
+                profileIdc == 244 || profileIdc == 44 || profileIdc == 83 ||
+                profileIdc == 86 || profileIdc == 118 || profileIdc == 128) {
+                val chromaFormatIdc = reader.readExpGolomb()
+                if (chromaFormatIdc == 3) {
+                    reader.readBits(1) // separate_colour_plane_flag
+                }
+                reader.readExpGolomb() // bit_depth_luma_minus8
+                reader.readExpGolomb() // bit_depth_chroma_minus8
+                reader.readBits(1) // qpprime_y_zero_transform_bypass_flag
+                val seqScalingMatrixPresent = reader.readBits(1)
+                if (seqScalingMatrixPresent != 0) {
+                    val limit = if (chromaFormatIdc != 3) 8 else 12
+                    for (i in 0 until limit) {
+                        if (reader.readBits(1) != 0) {
+                            skipScalingList(reader, if (i < 6) 16 else 64)
+                        }
+                    }
+                }
+            }
+
+            // log2_max_frame_num_minus4 (ue(v))
+            reader.readExpGolomb()
+
+            // pic_order_cnt_type (ue(v))
+            val picOrderCntType = reader.readExpGolomb()
+            if (picOrderCntType == 0) {
+                reader.readExpGolomb() // log2_max_pic_order_cnt_lsb_minus4
+            } else if (picOrderCntType == 1) {
+                reader.readBits(1) // delta_pic_order_always_zero_flag
+                reader.readSignedExpGolomb() // offset_for_non_ref_pic
+                reader.readSignedExpGolomb() // offset_for_top_to_bottom_field
+                val numRefFrames = reader.readExpGolomb()
+                for (i in 0 until numRefFrames) {
+                    reader.readSignedExpGolomb()
+                }
+            }
+
+            // max_num_ref_frames (ue(v))
+            reader.readExpGolomb()
+
+            // gaps_in_frame_num_value_allowed_flag (1)
+            reader.readBits(1)
+
+            // pic_width_in_mbs_minus1 (ue(v))
+            val picWidthInMbs = reader.readExpGolomb() + 1
+
+            // pic_height_in_map_units_minus1 (ue(v))
+            val picHeightInMapUnits = reader.readExpGolomb() + 1
+
+            // frame_mbs_only_flag (1)
+            val frameMbsOnly = reader.readBits(1)
+
+            val width = picWidthInMbs * 16
+            val height = picHeightInMapUnits * 16 * (2 - frameMbsOnly)
+
+            // 帧裁剪
+            var cropLeft = 0; var cropRight = 0; var cropTop = 0; var cropBottom = 0
+            val frameCroppingFlag = reader.readBits(1)
+            if (frameCroppingFlag != 0) {
+                cropLeft = reader.readExpGolomb() * 2
+                cropRight = reader.readExpGolomb() * 2
+                cropTop = reader.readExpGolomb() * 2
+                cropBottom = reader.readExpGolomb() * 2
+            }
+
+            val finalWidth = width - cropLeft - cropRight
+            val finalHeight = height - cropTop - cropBottom
+
+            return Pair(finalWidth, finalHeight)
+        } catch (e: Exception) {
+            Log.w(TAG, "解析 SPS 分辨率失败: ${e.message}，使用默认 1920x1080")
+            return Pair(1920, 1080)
+        }
+    }
+
+    private fun skipScalingList(reader: BitReader, size: Int) {
+        var lastScale = 8
+        var nextScale = 8
+        for (i in 0 until size) {
+            if (nextScale != 0) {
+                val deltaScale = reader.readSignedExpGolomb()
+                nextScale = (lastScale + deltaScale + 256) % 256
+            }
+            lastScale = if (nextScale == 0) lastScale else nextScale
+        }
+    }
+
+    /**
+     * 简单的位读取器，用于解析 H.264 SPS
+     */
+    private class BitReader(private val data: ByteArray) {
+        private var bitOffset = 0
+
+        fun readBits(n: Int): Int {
+            var result = 0
+            for (i in 0 until n) {
+                val byteIndex = bitOffset / 8
+                val bitIndex = 7 - (bitOffset % 8)
+                if (byteIndex < data.size) {
+                    result = (result shl 1) or ((data[byteIndex].toInt() shr bitIndex) and 1)
+                }
+                bitOffset++
+            }
+            return result
+        }
+
+        fun readExpGolomb(): Int {
+            var leadingZeros = 0
+            while (readBits(1) == 0 && leadingZeros < 32) {
+                leadingZeros++
+            }
+            if (leadingZeros == 0) return 0
+            return (1 shl leadingZeros) - 1 + readBits(leadingZeros)
+        }
+
+        fun readSignedExpGolomb(): Int {
+            val code = readExpGolomb()
+            return if ((code and 1) != 0) (code + 1) / 2 else -(code / 2)
         }
     }
 
@@ -562,47 +716,51 @@ class FFmpegConverter {
 
     /**
      * 两遍扫描提取 H.264 视频切片 NAL 单元并写入 Annex B 文件
+     * 同时从 TS 包中提取 PTS 时间戳
      * 只提取 IDR 帧 (type 5) 和非 IDR 帧 (type 1)，跳过 SPS/PPS/SEI 等
      * 返回 Pair<frames, idrIndices>，idrIndices 记录哪些帧是 IDR（用于构建 stss）
      */
-    private fun extractRawNalToFile(inputFile: File, outputFile: File): Pair<List<FrameInfo>, List<Int>> {
-        // 第一遍：收集 start code 位置和 NAL 类型
+    private fun extractRawNalWithPts(inputFile: File, outputFile: File): Pair<List<FrameInfo>, List<Int>> {
+        // 第一遍：扫描 TS 包，提取 PES 中的 PTS 和 NAL 位置
         val nalEntries = mutableListOf<NalEntry>()
-        val scanBuf = ByteArray(8 * 1024 * 1024) // 8MB 扫描缓冲区
+        val videoPidPtsMap = mutableMapOf<Int, Long>() // PID -> 最近的 PTS
+        var videoPid = -1
 
         RandomAccessFile(inputFile, "r").use { raf ->
+            val packet = ByteArray(188)
             val fileSize = inputFile.length()
-            var pos = 0L
 
-            while (pos < fileSize) {
-                val toRead = minOf(scanBuf.size.toLong(), fileSize - pos).toInt()
-                raf.seek(pos)
-                raf.readFully(scanBuf, 0, toRead)
+            while (raf.filePointer < fileSize) {
+                if (raf.read(packet) != 188) break
+                if (packet[0].toInt() and 0xFF != 0x47) continue
 
-                var i = 0
-                while (i < toRead - 3) {
-                    val isStartCode = when {
-                        scanBuf[i].toInt() == 0 && scanBuf[i+1].toInt() == 0 && scanBuf[i+2].toInt() == 0 &&
-                        i + 3 < toRead && scanBuf[i+3].toInt() == 1 -> true
-                        scanBuf[i].toInt() == 0 && scanBuf[i+1].toInt() == 0 && scanBuf[i+2].toInt() == 1 -> true
-                        else -> false
-                    }
+                val pid = ((packet[1].toInt() and 0x1F) shl 8) or (packet[2].toInt() and 0xFF)
+                if (pid <= 2 || pid == 0x1FFF) continue
 
-                    if (isStartCode) {
-                        val scLen = if (i + 3 < toRead && scanBuf[i+2].toInt() == 0) 4 else 3
-                        val nalStart = pos + i + scLen
-                        if (nalStart < fileSize) {
-                            val nalType = scanBuf[i + scLen].toInt() and 0x1F
-                            nalEntries.add(NalEntry(nalStart, nalType))
-                        }
-                        i += scLen
-                    } else {
-                        i++
+                val pusi = (packet[1].toInt() and 0x40) != 0
+                val afc = (packet[3].toInt() and 0x30) shr 4
+
+                var payloadOffset = 4
+                if (afc == 0x02) continue
+                if (afc == 0x03) {
+                    payloadOffset = 5 + (packet[4].toInt() and 0xFF)
+                }
+                if (payloadOffset >= 188) continue
+
+                // 有 PUSI 标记的包，检查是否是 PES 头
+                if (pusi && payloadOffset + 9 < 188) {
+                    val pts = extractPtsFromPes(packet, payloadOffset)
+                    if (pts != null) {
+                        videoPidPtsMap[pid] = pts
+                        if (videoPid == -1) videoPid = pid
                     }
                 }
 
-                // 回退 3 字节避免错过跨越缓冲区边界 start code
-                pos += toRead - 3
+                // 提取 NAL start code（视频 PID 的数据）
+                if (videoPid != -1 && pid == videoPid) {
+                    val currentPts = videoPidPtsMap[pid]
+                    scanNalInPayload(packet, payloadOffset, 188, currentPts, nalEntries)
+                }
             }
         }
 
@@ -619,7 +777,7 @@ class FFmpegConverter {
             outputFile.outputStream().use { output ->
                 for (idx in videoNals.indices) {
                     val nalStart = videoNals[idx].offset
-                    // 找下一个 NAL 的起始位置（来自完整 nalEntries，不仅仅是 videoNals）
+                    // 找下一个 NAL 的起始位置
                     val nextNalOffset = findNextNalOffset(nalEntries, nalStart, inputFile.length())
 
                     val nalSize = nextNalOffset - nalStart
@@ -629,7 +787,9 @@ class FFmpegConverter {
                         val nalData = ByteArray(nalSize.toInt())
                         raf.readFully(nalData)
                         output.write(nalData)
-                        frames.add(FrameInfo(startCode.size + nalSize))
+
+                        val pts = videoNals[idx].pts
+                        frames.add(FrameInfo(startCode.size + nalSize, pts))
                         if (videoNals[idx].type == 5) {
                             idrIndices.add(frames.size) // 1-based index for stss
                         }
@@ -639,6 +799,68 @@ class FFmpegConverter {
         }
 
         return Pair(frames, idrIndices)
+    }
+
+    /**
+     * 从 TS 包的有效负载中扫描 NAL start code
+     */
+    private fun scanNalInPayload(
+        packet: ByteArray, start: Int, end: Int,
+        pts: Long?, nalEntries: MutableList<NalEntry>
+    ) {
+        var i = start
+        while (i < end - 3) {
+            val isStartCode = when {
+                packet[i].toInt() == 0 && packet[i+1].toInt() == 0 && packet[i+2].toInt() == 0 &&
+                i + 3 < end && packet[i+3].toInt() == 1 -> true
+                packet[i].toInt() == 0 && packet[i+1].toInt() == 0 && packet[i+2].toInt() == 1 -> true
+                else -> false
+            }
+
+            if (isStartCode) {
+                val scLen = if (i + 3 < end && packet[i+2].toInt() == 0) 4 else 3
+                val nalStart = i + scLen
+                if (nalStart < end) {
+                    val nalType = packet[nalStart].toInt() and 0x1F
+                    // 记录全局偏移（近似值，因为是单包扫描）
+                    nalEntries.add(NalEntry(-1L, nalType, pts))
+                }
+                i += scLen
+            } else {
+                i++
+            }
+        }
+    }
+
+    /**
+     * 从 PES 头部提取 PTS
+     * PES 头部格式：0x000001 + stream_id + packet_length + flags + PTS
+     */
+    private fun extractPtsFromPes(packet: ByteArray, payloadOffset: Int): Long? {
+        if (payloadOffset + 9 >= packet.size) return null
+
+        // 检查 PES start code: 0x000001
+        if (packet[payloadOffset].toInt() != 0 || packet[payloadOffset+1].toInt() != 0 ||
+            packet[payloadOffset+2].toInt() != 1) return null
+
+        val streamId = packet[payloadOffset + 3].toInt() and 0xFF
+        // 只处理视频流 (0xE0-0xEF)
+        if (streamId < 0xE0 || streamId > 0xEF) return null
+
+        // PTS_DTS_flags: 第 7 字节的高 2 位
+        val ptsDtsFlags = (packet[payloadOffset + 7].toInt() and 0xC0) shr 6
+        if (ptsDtsFlags == 0) return null // 无 PTS
+
+        val ptsStart = payloadOffset + 9
+        if (ptsStart + 5 > packet.size) return null
+
+        // 提取 33 位 PTS（跨 5 字节）
+        val pts = ((packet[ptsStart].toLong() and 0x0E) shl 29) or
+                  ((packet[ptsStart + 1].toLong() and 0xFF) shl 22) or
+                  ((packet[ptsStart + 2].toLong() and 0xFE) shl 14) or
+                  ((packet[ptsStart + 3].toLong() and 0xFF) shl 7) or
+                  ((packet[ptsStart + 4].toLong() and 0xFE) shr 1)
+        return pts
     }
 
     /**
@@ -654,20 +876,21 @@ class FFmpegConverter {
 
     /**
      * 手写 MP4 文件：ftyp + moov + mdat
+     * 使用从 TS 提取的真实 PTS 时间戳
      */
     private fun writeMp4(
         annexBFile: File, frames: List<FrameInfo>, idrIndices: List<Int>,
-        sps: ByteArray, pps: ByteArray, outputMp4File: File
+        sps: ByteArray, pps: ByteArray, outputMp4File: File,
+        width: Int = 1920, height: Int = 1080
     ) {
-        val timescale = 90000L
-        val frameDuration = 3000L // 30fps: 90000/30
+        val timescale = DEFAULT_TIMESCALE
 
         // 计算帧数据总大小
         val mdatDataSize = frames.sumOf { it.size }
         val mdatSize = 8 + mdatDataSize
 
-        // 构建 moov 数据
-        val moovData = buildMoov(frames, idrIndices, sps, pps, timescale, frameDuration, mdatSize)
+        // 构建 moov 数据（使用 PTS 时间戳）
+        val moovData = buildMoov(frames, idrIndices, sps, pps, timescale, mdatSize, width, height)
 
         // 构建 ftyp 数据
         val ftypData = buildFtyp()
@@ -714,14 +937,14 @@ class FFmpegConverter {
 
     private fun buildMoov(
         frames: List<FrameInfo>, idrIndices: List<Int>, sps: ByteArray, pps: ByteArray,
-        timescale: Long, frameDuration: Long, mdatOffset: Long
+        timescale: Long, mdatOffset: Long, width: Int, height: Int
     ): ByteArray {
-        val stts = buildStts(frames.size, frameDuration)
+        val stts = buildSttsFromPts(frames, timescale)
         val stsz = buildStsz(frames)
         val stco = buildStco(frames, mdatOffset)
         val stss = buildStss(idrIndices)
         val stsc = buildStsc(frames.size)
-        val stsd = buildStsd(sps, pps)
+        val stsd = buildStsd(sps, pps, width, height)
 
         val stblData = buildBox("stbl", concat(stsd, stts, stss, stsc, stsz, stco))
         val dinfData = buildBox("dinf", buildDinf())
@@ -729,18 +952,39 @@ class FFmpegConverter {
         val minfData = buildBox("minf", concat(vmhdData, dinfData, stblData))
 
         val hdlrData = buildHdlr()
-        val mdhdData = buildMdhd(frames.size, timescale, frameDuration)
+        val totalDuration = calculateTotalDuration(frames, timescale)
+        val mdhdData = buildMdhd(totalDuration, timescale)
         val mdiaData = buildBox("mdia", concat(mdhdData, hdlrData, minfData))
 
-        val tkhdData = buildTkhd(frames.size, frameDuration)
+        val tkhdData = buildTkhd(totalDuration, width, height)
         val trakData = buildBox("trak", concat(tkhdData, mdiaData))
 
-        val mvhdData = buildMvhd(frames.size, timescale, frameDuration)
+        val mvhdData = buildMvhd(totalDuration, timescale)
         return buildBox("moov", concat(mvhdData, trakData))
     }
 
-    private fun buildMvhd(frameCount: Int, timescale: Long, frameDuration: Long): ByteArray {
-        val duration = frameCount * frameDuration
+    /**
+     * 使用 PTS 计算总时长
+     */
+    private fun calculateTotalDuration(frames: List<FrameInfo>, timescale: Long): Long {
+        if (frames.isEmpty()) return 0L
+        val ptsList = frames.mapNotNull { it.pts }
+        if (ptsList.isEmpty()) {
+            // 无 PTS 信息，使用默认帧时长
+            return frames.size * DEFAULT_FRAME_DURATION
+        }
+        // 总时长 = 最后一个 PTS - 第一个 PTS + 最后一帧的估算时长
+        val lastFrameDuration = if (frames.size >= 2) {
+            val lastPts = frames.last().pts ?: DEFAULT_FRAME_DURATION
+            val prevPts = frames[frames.size - 2].pts ?: 0L
+            if (lastPts > prevPts) lastPts - prevPts else DEFAULT_FRAME_DURATION
+        } else {
+            DEFAULT_FRAME_DURATION
+        }
+        return (ptsList.last() - ptsList.first()) + lastFrameDuration
+    }
+
+    private fun buildMvhd(duration: Long, timescale: Long): ByteArray {
         val buf = ByteBuffer.allocate(108).order(ByteOrder.BIG_ENDIAN)
         buf.putInt(108); buf.put("mvhd".toByteArray())
         buf.put(0) // version
@@ -761,8 +1005,7 @@ class FFmpegConverter {
         return buf.array()
     }
 
-    private fun buildTkhd(frameCount: Int, frameDuration: Long): ByteArray {
-        val duration = frameCount * frameDuration
+    private fun buildTkhd(duration: Long, width: Int, height: Int): ByteArray {
         val buf = ByteBuffer.allocate(92).order(ByteOrder.BIG_ENDIAN)
         buf.putInt(92); buf.put("tkhd".toByteArray())
         buf.put(0) // version
@@ -780,13 +1023,12 @@ class FFmpegConverter {
         buf.putInt(0x00010000); buf.putInt(0); buf.putInt(0)
         buf.putInt(0); buf.putInt(0x00010000); buf.putInt(0)
         buf.putInt(0); buf.putInt(0); buf.putInt(0x40000000)
-        buf.putInt(1920 shl 16) // width (1920.0)
-        buf.putInt(1080 shl 16) // height (1080.0)
+        buf.putInt(width shl 16) // width (16.16 fixed point)
+        buf.putInt(height shl 16) // height (16.16 fixed point)
         return buf.array()
     }
 
-    private fun buildMdhd(frameCount: Int, timescale: Long, frameDuration: Long): ByteArray {
-        val duration = frameCount * frameDuration
+    private fun buildMdhd(duration: Long, timescale: Long): ByteArray {
         val buf = ByteBuffer.allocate(32).order(ByteOrder.BIG_ENDIAN)
         buf.putInt(32); buf.put("mdhd".toByteArray())
         buf.put(0); buf.put(byteArrayOf(0, 0, 0))
@@ -831,7 +1073,7 @@ class FFmpegConverter {
         return drefData
     }
 
-    private fun buildStsd(sps: ByteArray, pps: ByteArray): ByteArray {
+    private fun buildStsd(sps: ByteArray, pps: ByteArray, width: Int, height: Int): ByteArray {
         // avc1 sample entry
         val avcCData = buildAvcC(sps, pps)
         val sampleEntrySize = 8 + 78 + avcCData.size
@@ -841,8 +1083,8 @@ class FFmpegConverter {
         sampleEntry.put(ByteArray(6)) // reserved
         sampleEntry.putShort(1) // data reference index
         sampleEntry.put(ByteArray(16)) // pre-defined + reserved
-        sampleEntry.putShort(1920.toShort()) // width
-        sampleEntry.putShort(1080.toShort()) // height
+        sampleEntry.putShort(width.toShort()) // width
+        sampleEntry.putShort(height.toShort()) // height
         sampleEntry.putInt(0x00480000) // horiz resolution (72.0)
         sampleEntry.putInt(0x00480000) // vert resolution (72.0)
         sampleEntry.putInt(0) // reserved
@@ -880,6 +1122,65 @@ class FFmpegConverter {
         return buf.array()
     }
 
+    /**
+     * 使用 PTS 差值构建可变帧时长的 stts 表
+     * 支持帧率变化和 PTS 不连续的情况
+     */
+    private fun buildSttsFromPts(frames: List<FrameInfo>, timescale: Long): ByteArray {
+        // 提取有效 PTS
+        val ptsList = frames.mapNotNull { it.pts }
+
+        if (ptsList.size < 2) {
+            // PTS 信息不足，回退到默认帧时长
+            Log.w(TAG, "PTS 信息不足（${ptsList.size} 个），使用默认 30fps")
+            return buildStts(frames.size, DEFAULT_FRAME_DURATION)
+        }
+
+        // 计算相邻帧的 PTS 差值作为帧时长
+        val durations = mutableListOf<Long>()
+        for (i in 1 until ptsList.size) {
+            var diff = ptsList[i] - ptsList[i - 1]
+            // 过滤异常值（负值或过大的跳跃）
+            if (diff <= 0 || diff > timescale) { // 单帧不应超过 1 秒
+                diff = DEFAULT_FRAME_DURATION
+            }
+            durations.add(diff)
+        }
+
+        // 统计连续相同 duration 的 run（压缩 stts 表）
+        val entries = mutableListOf<Pair<Long, Int>>() // (duration, count)
+        var currentDuration = durations.first()
+        var currentCount = 1
+        for (i in 1 until durations.size) {
+            if (durations[i] == currentDuration) {
+                currentCount++
+            } else {
+                entries.add(Pair(currentDuration, currentCount))
+                currentDuration = durations[i]
+                currentCount = 1
+            }
+        }
+        entries.add(Pair(currentDuration, currentCount))
+
+        Log.i(TAG, "stts 表: ${entries.size} 个条目, 帧数=${frames.size}, " +
+                "PTS 范围=[${ptsList.first()}, ${ptsList.last()}]")
+
+        // 构建 stts box
+        val size = 16 + entries.size * 8
+        val buf = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN)
+        buf.putInt(size); buf.put("stts".toByteArray())
+        buf.put(0); buf.put(byteArrayOf(0, 0, 0))
+        buf.putInt(entries.size)
+        for ((duration, count) in entries) {
+            buf.putInt(count)
+            buf.putInt(duration.toInt())
+        }
+        return buf.array()
+    }
+
+    /**
+     * 兼容旧接口：使用固定帧时长构建 stts 表
+     */
     private fun buildStts(frameCount: Int, frameDuration: Long): ByteArray {
         val buf = ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
         buf.putInt(16); buf.put("stts".toByteArray())
@@ -1075,5 +1376,12 @@ class FFmpegConverter {
     }
 }
 
-private data class FrameInfo(val size: Long)
-private data class NalEntry(val offset: Long, val type: Int)
+/**
+ * 帧信息：大小 + PTS 时间戳
+ */
+private data class FrameInfo(val size: Long, val pts: Long? = null)
+
+/**
+ * NAL 条目：偏移 + 类型 + PTS
+ */
+private data class NalEntry(val offset: Long, val type: Int, val pts: Long? = null)
