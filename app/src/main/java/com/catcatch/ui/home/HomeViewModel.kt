@@ -88,11 +88,10 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             val app = context.applicationContext as CatCatchApp
             app.deepLinkChannel.receiveAsFlow().collect { data ->
-                // 读取静默模式设置（优先使用 URL 参数，其次使用全局设置）
+                // 读取静默模式设置（全局设置优先，忽略 URL 参数）
                 val globalSilentMode = settingsRepository.silentMode.first()
-                val shouldSilent = data.silent || globalSilentMode
 
-                if (shouldSilent) {
+                if (globalSilentMode) {
                     // 静默模式：直接添加任务，不填充表单
                     silentAddTask(data.url, data.title, data.headers)
                 } else {
