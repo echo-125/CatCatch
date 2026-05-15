@@ -116,6 +116,31 @@ class DownloadRepository(
     }
 
     /**
+     * 重置卡住的任务（状态为 MERGING 或 TRANSCODING 的任务）
+     * 用于 APP 崩溃后恢复
+     */
+    suspend fun resetStuckTasks() {
+        val stuckStatuses = listOf(TaskStatus.MERGING, TaskStatus.TRANSCODING)
+        for (status in stuckStatuses) {
+            val tasks = taskDao.getTasksByStatus(status.name)
+            for (task in tasks) {
+                android.util.Log.w("DownloadRepository", "重置卡住的任务: ${task.id}, 状态: ${task.status}")
+                val updated = task.copy(
+                    status = TaskStatus.PENDING,
+                    progress = 0f,
+                    downloaded = 0,
+                    total = 0,
+                    message = "上次下载中断，已自动重置",
+                    duration = 0.0,
+                    resolution = "",
+                    fileSize = 0
+                )
+                taskDao.update(updated)
+            }
+        }
+    }
+
+    /**
      * 解析 M3U8 URL
      */
     suspend fun parseM3U8(url: String, headers: Map<String, String> = emptyMap()): Result<M3U8Data> {

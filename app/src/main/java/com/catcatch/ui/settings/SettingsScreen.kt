@@ -420,8 +420,8 @@ fun SettingsScreen(
     // 转码模式对话框
     if (showTranscodeModeDialog) {
         val options = listOf(
-            0 to "自动（推荐）",
-            1 to "FFmpeg-kit",
+            1 to "FFmpeg-kit（推荐）",
+            0 to "自动",
             2 to "系统原生"
         )
         var selected by remember { mutableIntStateOf(state.transcodeMode) }
@@ -525,9 +525,9 @@ private fun darkModeLabel(mode: Int): String = when (mode) {
 }
 
 private fun transcodeModeLabel(mode: Int): String = when (mode) {
-    1 -> "FFmpeg-kit"
+    1 -> "FFmpeg-kit（推荐）"
     2 -> "系统原生"
-    else -> "自动（推荐）"
+    else -> "自动"
 }
 
 @Composable

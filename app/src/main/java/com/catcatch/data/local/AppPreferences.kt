@@ -22,5 +22,5 @@ object AppPreferences {
     const val DEFAULT_MAX_CONCURRENT_TASKS = 3
     const val DEFAULT_MAX_CONCURRENT_SEGMENTS = 8
     const val DEFAULT_DARK_MODE = 0
-    const val DEFAULT_TRANSCODE_MODE = 0
+    const val DEFAULT_TRANSCODE_MODE = 1
 }

@@ -66,4 +66,10 @@ interface TaskDao {
      */
     @Query("SELECT outputName FROM tasks WHERE outputDir = :outputDir")
     suspend fun getOutputNamesByDir(outputDir: String): List<String>
+
+    /**
+     * 根据状态获取任务列表
+     */
+    @Query("SELECT * FROM tasks WHERE status = :status")
+    suspend fun getTasksByStatus(status: String): List<TaskEntity>
 }

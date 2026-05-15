@@ -23,7 +23,7 @@ import java.nio.ByteOrder
  * - 手写 muxer: 纯 Java 实现，不依赖系统服务，支持 PTS/DTS 重写
  *
  * 转码模式 (transcodeMode):
- * - 0 = 自动: 系统原生优先，失败时使用 FFmpeg-kit
+ * - 0 = 自动: 系统原生优先，降级至 FFmpeg-kit
  * - 1 = FFmpeg-kit: 仅使用 FFmpeg-kit
  * - 2 = 系统原生: 仅使用 MediaExtractor + 手写 muxer
  */
@@ -137,6 +137,8 @@ class FFmpegConverter {
             Log.i(TAG, "开始转码: ${inputTsFile.name} (${inputTsFile.length()} bytes), 模式=$transcodeMode")
             if (outputMp4File.exists()) outputMp4File.delete()
 
+            val startTime = System.currentTimeMillis()
+
             when (transcodeMode) {
                 1 -> {
                     convertWithFFmpegKit(inputTsFile, outputMp4File)
@@ -145,18 +147,40 @@ class FFmpegConverter {
                     convertWithMediaExtractorPipeline(inputTsFile, outputMp4File, externalFilesDir)
                 }
                 else -> {
-                    // 自动: 系统原生优先，FFmpeg-kit 兜底
-                    val nativeResult = runCatching {
-                        convertWithMediaExtractorPipeline(inputTsFile, outputMp4File, externalFilesDir)
-                    }
-                    if (nativeResult.isFailure) {
-                        Log.w(TAG, "系统原生转码失败，尝试 FFmpeg-kit: ${nativeResult.exceptionOrNull()?.message}")
-                        if (outputMp4File.exists()) outputMp4File.delete()
-                        convertWithFFmpegKit(inputTsFile, outputMp4File)
-                    }
+                    // 自动: 系统原生优先，降级至 FFmpeg-kit
+                    convertWithAutoFallback(inputTsFile, outputMp4File, externalFilesDir)
                 }
             }
+
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.i(TAG, "转码完成: ${outputMp4File.length()} bytes, 耗时=${elapsed}ms (${String.format("%.1f", elapsed / 1000.0)}s)")
+        }.map { Unit }
+    }
+
+    /**
+     * 自动模式: 系统原生 → FFmpeg-kit
+     */
+    private suspend fun convertWithAutoFallback(
+        inputTsFile: File,
+        outputMp4File: File,
+        externalFilesDir: File?
+    ) {
+        // 方案 1: 系统原生（MediaExtractor + 手写 muxer）
+        val nativeStart = System.currentTimeMillis()
+        val nativeResult = runCatching {
+            convertWithMediaExtractorPipeline(inputTsFile, outputMp4File, externalFilesDir)
         }
+        if (nativeResult.isSuccess) {
+            val nativeElapsed = System.currentTimeMillis() - nativeStart
+            Log.i(TAG, "系统原生转码成功, 耗时=${nativeElapsed}ms")
+            return
+        }
+        val nativeElapsed = System.currentTimeMillis() - nativeStart
+        Log.w(TAG, "系统原生转码失败(${nativeElapsed}ms): ${nativeResult.exceptionOrNull()?.message}")
+        if (outputMp4File.exists()) outputMp4File.delete()
+
+        // 方案 2: FFmpeg-kit
+        convertWithFFmpegKit(inputTsFile, outputMp4File)
     }
 
     /**
@@ -164,19 +188,21 @@ class FFmpegConverter {
      */
     private fun convertWithFFmpegKit(inputTsFile: File, outputMp4File: File) {
         Log.i(TAG, "使用 FFmpeg-kit 转码...")
+        val startTime = System.currentTimeMillis()
         val cmd = "-y -i \"${inputTsFile.absolutePath}\" -c copy -movflags +faststart \"${outputMp4File.absolutePath}\""
         val session = FFmpegKit.execute(cmd)
+        val elapsed = System.currentTimeMillis() - startTime
 
         if (!ReturnCode.isSuccess(session.returnCode)) {
             val logs = session.allLogsAsString
-            Log.e(TAG, "FFmpeg-kit 失败: code=${session.returnCode}, logs=$logs")
+            Log.e(TAG, "FFmpeg-kit 失败(${elapsed}ms): code=${session.returnCode}, logs=$logs")
             throw Exception("FFmpeg-kit 转码失败: ${session.returnCode}")
         }
 
         if (!outputMp4File.exists() || outputMp4File.length() < 1024) {
             throw Exception("FFmpeg-kit 输出文件无效")
         }
-        Log.i(TAG, "FFmpeg-kit 转码完成: ${outputMp4File.length()} bytes")
+        Log.i(TAG, "FFmpeg-kit 转码完成: ${outputMp4File.length()} bytes, 耗时=${elapsed}ms")
     }
 
     /**
@@ -191,7 +217,9 @@ class FFmpegConverter {
         val extractor = createInitializedExtractor(inputTsFile)
         if (extractor != null) {
             try {
+                val t = System.currentTimeMillis()
                 convertWithExtractor(extractor, inputTsFile, outputMp4File)
+                Log.i(TAG, "MediaExtractor 转码成功: ${outputMp4File.length()} bytes, 耗时=${System.currentTimeMillis() - t}ms")
                 return
             } catch (e: Exception) {
                 Log.e(TAG, "MediaExtractor 转码失败: ${e.message}")
@@ -211,7 +239,9 @@ class FFmpegConverter {
                 val altExtractor = createInitializedExtractor(altFile)
                 if (altExtractor != null) {
                     try {
+                        val t = System.currentTimeMillis()
                         convertWithExtractor(altExtractor, altFile, outputMp4File)
+                        Log.i(TAG, "外部目录 MediaExtractor 转码成功: ${outputMp4File.length()} bytes, 耗时=${System.currentTimeMillis() - t}ms")
                         return
                     } catch (e: Exception) {
                         Log.e(TAG, "外部目录 MediaExtractor 也失败: ${e.message}")
@@ -229,8 +259,9 @@ class FFmpegConverter {
 
         // 方案 3: 纯手写 TS→MP4 muxer（支持 PTS 重写）
         Log.i(TAG, "尝试纯手写 TS→MP4 muxer（PTS 重写模式）...")
+        val t = System.currentTimeMillis()
         convertWithManualMuxer(inputTsFile, outputMp4File)
-        Log.i(TAG, "手写 muxer 转码完成: ${outputMp4File.length()} bytes")
+        Log.i(TAG, "手写 muxer 转码完成: ${outputMp4File.length()} bytes, 耗时=${System.currentTimeMillis() - t}ms")
     }
 
     private fun createInitializedExtractor(file: File): MediaExtractor? {

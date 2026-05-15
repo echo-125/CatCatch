@@ -107,8 +107,25 @@ app/src/main/java/com/catcatch/
 2. **解析分片 URL** - 递归解析（最大 5 层），主播放列表按带宽降序选最高码率，相对路径转绝对路径，循环引用检测，解析 `#EXT-X-KEY` 提取加密信息（METHOD/URI/IV）
 3. **并发下载分片** - 协程 + Dispatchers.IO 并发（Semaphore 控制，默认 8 并发），断点续传，加密分片自动 AES-128-CBC 解密（密钥缓存），单分片重试 3 次（指数退避），批量重试 3 轮
 4. **合并分片** - 按顺序二进制合并所有 .ts 为 merged.ts，清理临时分片，标记任务完成释放槽位
-5. **后台转码** - 独立协程运行，不阻塞下载队列。Android MediaExtractor + MediaMuxer 无损转码，csd-0/csd-1 无效时注入 H.264 SPS/PPS（TS 包解析 + 原始字节扫描双保险），失败时保留 .ts
+5. **后台转码** - 独立协程运行，不阻塞下载队列。支持三种转码后端：
+   - **FFmpeg-kit** (mode=1): ffmpeg 命令行 `-c copy` 流复制，兼容性最好，无需手动处理 codec
+   - **系统原生** (mode=2): MediaExtractor + 手写 muxer，支持 PTS/DTS 重写，时长精度更高
+   - **自动模式** (mode=0): 系统原生 → FFmpeg-kit 依次降级
 6. **保存文件** - SAF 复制到用户选择的目录，清理临时文件
+
+### 转码方案对比（同一文件 125MB 测试）
+
+| 指标 | 系统原生 (mode=2) | FFmpeg-kit (mode=1) | 自动 (mode=0) |
+|------|-------------------|---------------------|---------------|
+| 输出大小 | 121,075,956 bytes | 121,182,582 bytes | 121,075,956 bytes |
+| 耗时 | 4,943ms (4.9s) | **599ms (0.6s)** | 5,080ms (5.1s) |
+| 输出时长 | 358,167,055 us | 358,200,000 us | 358,167,055 us |
+| 时长偏差 | +0.009%（更精确） | +0.019% | +0.009% |
+| codec 处理 | 手动提取 SPS/PPS 注入 | FFmpeg 自动处理 | 手动提取 SPS/PPS 注入 |
+| 速度比 | 1x (基准) | **8.4x 快** | 1x (基准) |
+| 兼容性 | 依赖系统 MediaExtractor | 最佳 | 系统原生优先 |
+
+FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。默认使用 FFmpeg-kit（mode=1），自动模式选择系统原生路径。
 
 ## 任务并发模型
 
@@ -205,7 +222,7 @@ app/src/main/java/com/catcatch/
 - Navigation Compose 已引入，目前三个页面：Home、Downloads、Settings
 - 发布版启用 ProGuard 混淆（`isMinifyEnabled = true`）和资源缩减
 - 存储适配：Android 10+ 使用 MediaStore / SAF，默认保存到 `/storage/emulated/0/Download/CatCatch`
-- 转码方案：Android 原生 MediaExtractor + MediaMuxer（优先），手写 MP4 muxer（兜底），非 ffmpeg-kit
+- 转码方案：支持三种模式（自动/FFmpeg-kit/系统原生），自动模式优先系统原生 → FFmpeg-kit
 - 加密支持：AES-128-CBC，密钥通过 HTTP 下载并缓存，IV 从 M3U8 解析或用媒体序列号生成
 - 配置变更（旋转）时 Activity 重建，通过 SavedStateHandle 保持输入状态
 - Segment 数据模型包含加密字段（encryptionMethod/keyUri/iv），未加密分片 isEncrypted=false 不受影响
