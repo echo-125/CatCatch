@@ -18,11 +18,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import javax.inject.Inject
 
 /**
@@ -93,10 +93,10 @@ class HomeViewModel @Inject constructor(
             if (data != null) {
                 // 清除待处理数据，避免重复处理
                 app.pendingDeepLink = null
-                // 读取静默模式设置（全局设置优先，忽略 URL 参数）
+                // URL 参数 silent=true 可单次静默添加，全局静默模式仍然生效
                 val globalSilentMode = settingsRepository.silentMode.first()
 
-                if (globalSilentMode) {
+                if (globalSilentMode || data.silent) {
                     // 静默模式：直接添加任务，不填充表单
                     silentAddTask(data.url, data.title, data.headers)
                 } else {
@@ -320,10 +320,13 @@ class HomeViewModel @Inject constructor(
                     val baseFileName = parts.getOrNull(1)?.trim()?.ifEmpty { generateFileName(url) } ?: generateFileName(url)
                     val fileName = getUniqueFileName(baseFileName, getDownloadDir())
 
+                    val headers = parts.getOrNull(2)?.trim()?.let { parseHeaders(it) } ?: emptyMap()
+
                     val taskId = repository.addTask(
                         url = url,
                         outputName = fileName,
-                        outputDir = getDownloadDir()
+                        outputDir = getDownloadDir(),
+                        headers = headers
                     )
 
                     DownloadService.start(context, taskId)
@@ -369,18 +372,12 @@ class HomeViewModel @Inject constructor(
         // 尝试解析 JSON 格式
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
             try {
-                val map = mutableMapOf<String, String>()
-                val content = trimmed.removeSurrounding("{", "}")
-                // 简单解析 "key":"value" 格式
-                val pairs = content.split(",")
-                for (pair in pairs) {
-                    val keyValue = pair.split(":", limit = 2)
-                    if (keyValue.size == 2) {
-                        val key = keyValue[0].trim().removeSurrounding("\"")
-                        val value = keyValue[1].trim().removeSurrounding("\"")
-                        if (key.isNotEmpty() && value.isNotEmpty()) {
-                            map[key] = value
-                        }
+                val jsonObject = JSONObject(trimmed)
+                val map = LinkedHashMap<String, String>()
+                jsonObject.keys().forEach { key ->
+                    val value = jsonObject.optString(key)
+                    if (key.isNotBlank() && value.isNotBlank()) {
+                        map[key] = value
                     }
                 }
                 return map

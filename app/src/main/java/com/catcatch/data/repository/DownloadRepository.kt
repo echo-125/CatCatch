@@ -8,6 +8,7 @@ import com.catcatch.domain.model.M3U8Data
 import com.catcatch.domain.model.TaskStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import org.json.JSONObject
 
 /**
  * 下载仓库
@@ -43,7 +44,7 @@ class DownloadRepository(
         outputDir: String,
         headers: Map<String, String> = emptyMap()
     ): Long {
-        val headersJson = if (headers.isEmpty()) "" else headers.entries.joinToString(",") { "${it.key}=${it.value}" }
+        val headersJson = encodeHeaders(headers)
         val entity = TaskEntity(
             url = url,
             outputName = outputName,
@@ -60,10 +61,10 @@ class DownloadRepository(
     suspend fun updateTaskStatus(
         taskId: Long,
         status: TaskStatus,
-        progress: Float = 0f,
-        downloaded: Int = 0,
-        total: Int = 0,
-        message: String = "",
+        progress: Float? = null,
+        downloaded: Int? = null,
+        total: Int? = null,
+        message: String? = null,
         duration: Double? = null,
         resolution: String? = null,
         fileSize: Long? = null,
@@ -72,10 +73,10 @@ class DownloadRepository(
         val entity = taskDao.getTaskById(taskId) ?: return
         val updated = entity.copy(
             status = status,
-            progress = progress,
-            downloaded = downloaded,
-            total = total,
-            message = message,
+            progress = progress ?: entity.progress,
+            downloaded = downloaded ?: entity.downloaded,
+            total = total ?: entity.total,
+            message = message ?: entity.message,
             duration = duration ?: entity.duration,
             resolution = resolution ?: entity.resolution,
             fileSize = fileSize ?: entity.fileSize,
@@ -118,11 +119,11 @@ class DownloadRepository(
     }
 
     /**
-     * 重置卡住的任务（状态为 MERGING 或 TRANSCODING 的任务）
+     * 重置卡住的任务（下载服务被系统杀死后残留的运行中状态）
      * 用于 APP 崩溃后恢复
      */
     suspend fun resetStuckTasks() {
-        val stuckStatuses = listOf(TaskStatus.MERGING, TaskStatus.TRANSCODING)
+        val stuckStatuses = listOf(TaskStatus.DOWNLOADING, TaskStatus.MERGING, TaskStatus.TRANSCODING)
         for (status in stuckStatuses) {
             val tasks = taskDao.getTasksByStatus(status.name)
             for (task in tasks) {
@@ -181,12 +182,7 @@ class DownloadRepository(
      * TaskEntity 转 DownloadTask
      */
     private fun TaskEntity.toDomain(): DownloadTask {
-        val headersMap = if (headers.isEmpty()) emptyMap() else {
-            headers.split(",").associate {
-                val parts = it.split("=", limit = 2)
-                parts[0] to (parts.getOrNull(1) ?: "")
-            }
-        }
+        val headersMap = decodeHeaders(headers)
         return DownloadTask(
             id = id,
             url = url,
@@ -204,5 +200,31 @@ class DownloadRepository(
             fileSize = fileSize,
             savedPath = savedPath
         )
+    }
+
+    private fun encodeHeaders(headers: Map<String, String>): String {
+        if (headers.isEmpty()) return ""
+        val json = JSONObject()
+        headers.forEach { (key, value) -> json.put(key, value) }
+        return json.toString()
+    }
+
+    private fun decodeHeaders(headers: String): Map<String, String> {
+        if (headers.isBlank()) return emptyMap()
+
+        if (headers.trim().startsWith("{")) {
+            return runCatching {
+                val json = JSONObject(headers)
+                json.keys().asSequence().associateWith { key -> json.optString(key) }
+            }.getOrDefault(emptyMap())
+        }
+
+        // Backward compatibility for old "key=value,key=value" rows.
+        return headers.split(",")
+            .filter { it.contains("=") }
+            .associate {
+                val parts = it.split("=", limit = 2)
+                parts[0] to (parts.getOrNull(1) ?: "")
+            }
     }
 }

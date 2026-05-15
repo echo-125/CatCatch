@@ -20,6 +20,7 @@ import com.catcatch.data.repository.SettingsRepository
 import com.catcatch.ui.navigation.MainScreen
 import com.catcatch.ui.theme.CatCatchTheme
 import dagger.hilt.android.AndroidEntryPoint
+import org.json.JSONObject
 import javax.inject.Inject
 
 /**
@@ -134,17 +135,12 @@ class MainActivity : ComponentActivity() {
         if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return emptyMap()
 
         return try {
-            val map = mutableMapOf<String, String>()
-            val content = trimmed.removeSurrounding("{", "}")
-            val pairs = content.split(",")
-            for (pair in pairs) {
-                val keyValue = pair.split(":", limit = 2)
-                if (keyValue.size == 2) {
-                    val key = keyValue[0].trim().removeSurrounding("\"")
-                    val value = keyValue[1].trim().removeSurrounding("\"")
-                    if (key.isNotEmpty() && value.isNotEmpty()) {
-                        map[key] = value
-                    }
+            val jsonObject = JSONObject(trimmed)
+            val map = LinkedHashMap<String, String>()
+            jsonObject.keys().forEach { key ->
+                val value = jsonObject.optString(key)
+                if (key.isNotBlank() && value.isNotBlank()) {
+                    map[key] = value
                 }
             }
             map

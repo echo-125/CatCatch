@@ -19,11 +19,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -76,6 +79,7 @@ class DownloadService : Service() {
     private val activeTasks = ConcurrentHashMap<Long, Job>()
     private val taskQueue = LinkedHashSet<Long>()
     private val transcodeJobs = ConcurrentHashMap<Long, Job>()
+    private val schedulerMutex = Mutex()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -88,43 +92,52 @@ class DownloadService : Service() {
 
         val action = intent?.getStringExtra(EXTRA_ACTION)
         if (action == ACTION_CANCEL) {
+            startForeground(FOREGROUND_NOTIFICATION_ID, createForegroundNotification())
             cancelTask(taskId)
             return START_STICKY
         }
 
         startForeground(FOREGROUND_NOTIFICATION_ID, createForegroundNotification())
 
-        taskQueue.add(taskId)
-        serviceScope.launch { tryStartNext() }
+        serviceScope.launch {
+            schedulerMutex.withLock {
+                taskQueue.add(taskId)
+            }
+            tryStartNext()
+        }
 
         return START_STICKY
     }
 
     private suspend fun tryStartNext() {
-        val maxConcurrentTasks = settingsRepository.maxConcurrentTasks.first()
-        while (activeTasks.size < maxConcurrentTasks && taskQueue.isNotEmpty()) {
-            val taskId = taskQueue.firstOrNull { it !in activeTasks.keys } ?: break
-            taskQueue.remove(taskId)
+        schedulerMutex.withLock {
+            val maxConcurrentTasks = settingsRepository.maxConcurrentTasks.first()
+            while (activeTasks.size < maxConcurrentTasks && taskQueue.isNotEmpty()) {
+                val taskId = taskQueue.firstOrNull { it !in activeTasks.keys } ?: break
+                taskQueue.remove(taskId)
 
-            val job = serviceScope.launch {
-                downloadTask(taskId)
-                activeTasks.remove(taskId)
-                tryStartNext()
+                val job = serviceScope.launch {
+                    downloadTask(taskId)
+                    activeTasks.remove(taskId)
+                    tryStartNext()
+                }
+                activeTasks[taskId] = job
             }
-            activeTasks[taskId] = job
-        }
 
-        updateForegroundNotification()
-        stopSelfIfIdle()
+            updateForegroundNotification()
+            stopSelfIfIdle()
+        }
     }
 
     private fun cancelTask(taskId: Long) {
         activeTasks[taskId]?.cancel()
         activeTasks.remove(taskId)
-        taskQueue.remove(taskId)
         transcodeJobs[taskId]?.cancel()
         transcodeJobs.remove(taskId)
         serviceScope.launch {
+            schedulerMutex.withLock {
+                taskQueue.remove(taskId)
+            }
             repository.updateTaskStatus(taskId, TaskStatus.CANCELLED)
             tryStartNext()
         }
@@ -186,7 +199,7 @@ class DownloadService : Service() {
 
             // 获取 SAF URI 和下载目录
             val safUriString = settingsRepository.downloadDirUri.first()
-            val useSaf = safUriString != null
+            val useSaf = settingsRepository.useDirPicker.first() && safUriString != null
 
             val downloadDir = if (useSaf) {
                 val transcodeDir = getExternalFilesDir("transcode")
@@ -213,10 +226,10 @@ class DownloadService : Service() {
 
             android.util.Log.d("DownloadService", "开始下载分片，并发数: $maxConcurrentSegments")
             coroutineScope {
-                segments.map { segment ->
+                segments.mapIndexed { ordinal, segment ->
                     async {
                         semaphore.withPermit {
-                            val segmentFile = File(downloadDir, "segment_${segment.index}.ts")
+                            val segmentFile = segmentFile(downloadDir, ordinal)
                             val result = segmentDownloader.downloadWithRetry(segment, segmentFile, headers)
                             if (result.isSuccess) {
                                 val count = completedCount.incrementAndGet()
@@ -227,8 +240,8 @@ class DownloadService : Service() {
                                     // 估算总文件大小：已下载分片总大小 / 已下载数 * 总数
                                     if (fileSizeEstimated == 0L && count >= 3) {
                                         var downloadedBytes = 0L
-                                        for (i in 0 until count) {
-                                            val f = File(downloadDir, "segment_$i.ts")
+                                        for (i in segments.indices) {
+                                            val f = segmentFile(downloadDir, i)
                                             if (f.exists()) downloadedBytes += f.length()
                                         }
                                         fileSizeEstimated = downloadedBytes / count * segments.size
@@ -249,8 +262,8 @@ class DownloadService : Service() {
             }
 
             // 批量重试失败分片
-            var failedSegments = segments.filter { segment ->
-                val file = File(downloadDir, "segment_${segment.index}.ts")
+            var failedSegments = segments.withIndex().filter { (ordinal, _) ->
+                val file = segmentFile(downloadDir, ordinal)
                 !file.exists() || file.length() == 0L
             }
 
@@ -258,11 +271,11 @@ class DownloadService : Service() {
                 repeat(3) { round ->
                     if (failedSegments.isEmpty()) return@repeat
                     delay(2000L * (round + 1))
-                    val remaining = mutableListOf<Segment>()
-                    for (segment in failedSegments) {
-                        val segmentFile = File(downloadDir, "segment_${segment.index}.ts")
-                        val result = segmentDownloader.downloadWithRetry(segment, segmentFile, headers)
-                        if (result.isSuccess) completedCount.incrementAndGet() else remaining.add(segment)
+                    val remaining = mutableListOf<IndexedValue<Segment>>()
+                    for ((ordinal, segment) in failedSegments) {
+                        val file = segmentFile(downloadDir, ordinal)
+                        val result = segmentDownloader.downloadWithRetry(segment, file, headers)
+                        if (result.isSuccess) completedCount.incrementAndGet() else remaining.add(IndexedValue(ordinal, segment))
                     }
                     failedSegments = remaining
                 }
@@ -286,7 +299,7 @@ class DownloadService : Service() {
 
             // 清理临时分片文件
             for (i in 0 until segments.size) {
-                File(downloadDir, "segment_$i.ts").delete()
+                segmentFile(downloadDir, i).delete()
             }
 
             // 合并完成，提取视频信息
@@ -320,6 +333,8 @@ class DownloadService : Service() {
                 NotificationUtil.showDownloadComplete(this, task.outputName, savedPath)
             }
 
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = e.message ?: "未知错误")
         }
@@ -382,6 +397,8 @@ class DownloadService : Service() {
                     NotificationUtil.showDownloadComplete(this, outputName, mergedFile.absolutePath)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.e("DownloadService", "转码异常", e)
             repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码异常: ${e.message}")
@@ -395,11 +412,9 @@ class DownloadService : Service() {
         return try {
             val safUri = Uri.parse(safUriString)
             val result = copyFileToSaf(sourceFile, outputName, safUri)
-            if (result.startsWith("已保存")) {
-                sourceFile.delete()
-                downloadDir.deleteRecursively()
-            }
-            result
+            sourceFile.delete()
+            downloadDir.deleteRecursively()
+            result.displayName
         } catch (e: Exception) {
             android.util.Log.e("DownloadService", "复制到 SAF 目录失败", e)
             sourceFile.absolutePath
@@ -409,7 +424,7 @@ class DownloadService : Service() {
     private fun mergeSegments(downloadDir: File, segmentCount: Int, outputFile: File) {
         outputFile.outputStream().use { output ->
             for (i in 0 until segmentCount) {
-                val segmentFile = File(downloadDir, "segment_$i.ts")
+                val segmentFile = segmentFile(downloadDir, i)
                 if (segmentFile.exists()) {
                     segmentFile.inputStream().use { input ->
                         input.copyTo(output, bufferSize = 256 * 1024)
@@ -419,8 +434,14 @@ class DownloadService : Service() {
         }
     }
 
-    private fun copyFileToSaf(sourceFile: File, outputName: String, safUri: Uri): String {
-        val dir = DocumentFile.fromTreeUri(this, safUri) ?: return "SAF 目录"
+    private fun segmentFile(downloadDir: File, ordinal: Int): File {
+        return File(downloadDir, "segment_$ordinal.ts")
+    }
+
+    private data class SafCopyResult(val displayName: String, val uri: Uri)
+
+    private fun copyFileToSaf(sourceFile: File, outputName: String, safUri: Uri): SafCopyResult {
+        val dir = DocumentFile.fromTreeUri(this, safUri) ?: throw Exception("SAF 目录不可用")
 
         val extension = sourceFile.extension
         val fileNameWithExt = "$outputName.$extension"
@@ -430,20 +451,16 @@ class DownloadService : Service() {
             else -> "application/octet-stream"
         }
 
-        val targetFile = dir.createFile(mimeType, fileNameWithExt) ?: return "SAF 目录"
+        val targetFile = dir.createFile(mimeType, fileNameWithExt) ?: throw Exception("无法创建 SAF 文件")
 
-        try {
-            contentResolver.openOutputStream(targetFile.uri)?.use { output ->
-                sourceFile.inputStream().use { input ->
-                    input.copyTo(output, bufferSize = 256 * 1024)
-                }
+        contentResolver.openOutputStream(targetFile.uri)?.use { output ->
+            sourceFile.inputStream().use { input ->
+                input.copyTo(output, bufferSize = 256 * 1024)
             }
-        } catch (e: Exception) {
-            android.util.Log.e("DownloadService", "复制文件失败", e)
-        }
+        } ?: throw Exception("无法打开 SAF 输出流")
 
         // 返回实际保存的文件名（带后缀）
-        return fileNameWithExt
+        return SafCopyResult(fileNameWithExt, targetFile.uri)
     }
 
     private fun showNotification(fileName: String, message: String) {
