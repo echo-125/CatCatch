@@ -15,14 +15,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
@@ -31,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +36,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.catcatch.domain.model.DownloadTask
 import com.catcatch.domain.model.TaskStatus
-import com.catcatch.ui.components.ExpandableSection
 import com.catcatch.ui.components.StatusChip
 import com.catcatch.ui.theme.StatusCancelled
 import com.catcatch.ui.theme.StatusCompleted
@@ -76,8 +70,6 @@ fun TaskItem(
     onDelete: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
-    onOpenFolder: () -> Unit = {},
-    onPlay: () -> Unit = {},
     onLongClick: () -> Unit = {},
     onClick: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -115,7 +107,7 @@ fun TaskItem(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(12.dp)
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 // 第一行：文件名 + 状态标签/Checkbox
                 Row(
@@ -132,7 +124,7 @@ fun TaskItem(
                     }
 
                     Text(
-                        text = task.outputName,
+                        text = task.displayName,
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -145,27 +137,33 @@ fun TaskItem(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 根据状态显示不同内容
-                when (task.status) {
-                    TaskStatus.DOWNLOADING -> DownloadingInfo(task)
-                    TaskStatus.COMPLETED -> CompletedInfo(task, isSelectionMode)
-                    TaskStatus.FAILED -> FailedInfo(task)
-                    TaskStatus.MERGING, TaskStatus.TRANSCODING -> MergingInfo(task)
-                    else -> {}
-                }
-
-                // 操作按钮行（多选模式下隐藏）
+                // 第二行：状态信息 + 操作按钮（同一行）
                 if (!isSelectionMode) {
-                    ActionBar(
-                        task = task,
-                        onCancel = onCancel,
-                        onRetry = onRetry,
-                        onDelete = onDelete,
-                        onOpenFolder = onOpenFolder,
-                        onPlay = onPlay
-                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 左侧：状态特定信息
+                        Box(modifier = Modifier.weight(1f)) {
+                            when (task.status) {
+                                TaskStatus.DOWNLOADING -> DownloadingInfo(task)
+                                TaskStatus.COMPLETED -> CompletedInfo(task)
+                                TaskStatus.FAILED -> FailedInfo(task)
+                                TaskStatus.MERGING, TaskStatus.TRANSCODING -> MergingInfo(task)
+                                else -> {}
+                            }
+                        }
+
+                        // 右侧：操作按钮
+                        ActionBar(
+                            task = task,
+                            onCancel = onCancel,
+                            onRetry = onRetry,
+                            onDelete = onDelete
+                        )
+                    }
                 }
             }
         }
@@ -173,211 +171,120 @@ fun TaskItem(
 }
 
 /**
- * 操作按钮行
+ * 操作按钮行（紧凑布局）
  */
 @Composable
 private fun ActionBar(
     task: DownloadTask,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
-    onDelete: () -> Unit,
-    onOpenFolder: () -> Unit,
-    onPlay: () -> Unit
+    onDelete: () -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp),
-        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
     ) {
         when (task.status) {
             TaskStatus.DOWNLOADING, TaskStatus.PENDING -> {
-                TextButton(onClick = onCancel) {
+                IconButton(onClick = onCancel, modifier = Modifier.size(28.dp)) {
                     Icon(
                         imageVector = Icons.Default.Cancel,
-                        contentDescription = null,
+                        contentDescription = "取消",
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "取消",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelMedium
                     )
                 }
             }
             TaskStatus.FAILED, TaskStatus.CANCELLED -> {
-                TextButton(onClick = onRetry) {
+                IconButton(onClick = onRetry, modifier = Modifier.size(28.dp)) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
+                        contentDescription = "重试",
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "重试",
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
-            }
-            TaskStatus.COMPLETED -> {
-                TextButton(onClick = onOpenFolder) {
-                    Icon(
-                        imageVector = Icons.Default.FolderOpen,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "目录",
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
-                TextButton(onClick = onPlay) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "播放",
-                        style = MaterialTheme.typography.labelMedium
                     )
                 }
             }
             else -> {}
         }
 
-        IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
             Icon(
                 imageVector = Icons.Default.Delete,
                 contentDescription = "删除",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(16.dp)
             )
         }
     }
 }
 
 /**
- * 下载中状态信息
+ * 下载中状态信息（紧凑布局）
  */
 @Composable
 private fun DownloadingInfo(task: DownloadTask) {
-    // 进度条
-    LinearProgressIndicator(
-        progress = { task.progress },
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(6.dp)
-            .clip(RoundedCornerShape(3.dp)),
-        color = StatusDownloading,
-        trackColor = MaterialTheme.colorScheme.surfaceVariant
-    )
-
-    Spacer(modifier = Modifier.height(4.dp))
-
-    // 进度百分比 + 速度 + 剩余时间
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = "${task.progressText} ${task.speedText}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+    Column {
+        // 进度条
+        LinearProgressIndicator(
+            progress = { task.progress },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp)),
+            color = StatusDownloading,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant
         )
-        if (task.remainingTimeText.isNotEmpty()) {
-            Text(
-                text = "剩余 ${task.remainingTimeText}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
 
-    // 分片信息 + 时长
-    val parts = mutableListOf<String>()
-    if (task.durationText.isNotEmpty()) parts.add(task.durationText)
-    if (task.total > 0) {
-        parts.add("分片: ${task.downloaded}/${task.total}")
-    }
-    if (parts.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // 进度信息行
+        val infoParts = mutableListOf<String>()
+        infoParts.add(task.progressText)
+        if (task.speedText.isNotEmpty()) infoParts.add(task.speedText)
+        if (task.durationText.isNotEmpty()) infoParts.add(task.durationText)
+        if (task.total > 0) infoParts.add("${task.downloaded}/${task.total}")
         Text(
-            text = parts.joinToString(" · "),
+            text = infoParts.joinToString(" · "),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
         )
     }
 }
 
 /**
- * 已完成状态信息
+ * 已完成状态信息（紧凑布局）
  */
 @Composable
-private fun CompletedInfo(task: DownloadTask, isSelectionMode: Boolean) {
-    // 视频属性行：分辨率 · 时长 · 文件大小
+private fun CompletedInfo(task: DownloadTask) {
     val infoParts = mutableListOf<String>()
     if (task.resolutionText.isNotEmpty()) infoParts.add(task.resolutionText)
     if (task.durationText.isNotEmpty()) infoParts.add(task.durationText)
     if (task.fileSize > 0) infoParts.add(task.fileSizeText)
-    if (infoParts.isNotEmpty()) {
-        Text(
-            text = infoParts.joinToString(" · "),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-
-    // 完成时间行
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (!isSelectionMode) {
-            Icon(
-                imageVector = Icons.Default.CheckCircle,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = StatusCompleted
-            )
-        }
-        if (task.completedAt != null) {
-            Text(
-                text = formatTime(task.completedAt),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
+    Text(
+        text = infoParts.joinToString(" · "),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1
+    )
 }
 
 /**
- * 失败状态信息
+ * 失败状态信息（紧凑布局）
  */
 @Composable
 private fun FailedInfo(task: DownloadTask) {
-    if (task.message.isNotEmpty()) {
-        ExpandableSection(title = "下载失败 - 点击查看详情") {
-            Text(
-                text = task.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-    }
+    Text(
+        text = task.message.ifEmpty { "下载失败" },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
 }
 
 /**
- * 合并中状态信息
+ * 合并中状态信息（紧凑布局）
  */
 @Composable
 private fun MergingInfo(task: DownloadTask) {
@@ -387,14 +294,15 @@ private fun MergingInfo(task: DownloadTask) {
         Icon(
             imageVector = Icons.Default.Refresh,
             contentDescription = null,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(14.dp),
             tint = StatusMerging
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = "正在合并分片...",
+            text = task.message.ifEmpty { "合并中..." },
             style = MaterialTheme.typography.bodySmall,
-            color = StatusMerging
+            color = StatusMerging,
+            maxLines = 1
         )
     }
 }

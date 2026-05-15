@@ -23,5 +23,6 @@ data class TaskEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val duration: Double = 0.0,
     val resolution: String = "",
-    val fileSize: Long = 0
+    val fileSize: Long = 0,
+    val savedPath: String = ""  // 文件实际保存路径
 )

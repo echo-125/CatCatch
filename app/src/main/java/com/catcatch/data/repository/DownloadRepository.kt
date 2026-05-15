@@ -66,7 +66,8 @@ class DownloadRepository(
         message: String = "",
         duration: Double? = null,
         resolution: String? = null,
-        fileSize: Long? = null
+        fileSize: Long? = null,
+        savedPath: String? = null
     ) {
         val entity = taskDao.getTaskById(taskId) ?: return
         val updated = entity.copy(
@@ -77,7 +78,8 @@ class DownloadRepository(
             message = message,
             duration = duration ?: entity.duration,
             resolution = resolution ?: entity.resolution,
-            fileSize = fileSize ?: entity.fileSize
+            fileSize = fileSize ?: entity.fileSize,
+            savedPath = savedPath ?: entity.savedPath
         )
         taskDao.update(updated)
     }
@@ -199,7 +201,8 @@ class DownloadRepository(
             createdAt = createdAt,
             duration = duration,
             resolution = resolution,
-            fileSize = fileSize
+            fileSize = fileSize,
+            savedPath = savedPath
         )
     }
 }

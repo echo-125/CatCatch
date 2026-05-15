@@ -23,8 +23,33 @@ data class DownloadTask(
     val speed: Long = 0, // bytes per second
     val outputPath: String = "",
     val duration: Double = 0.0,
-    val resolution: String = ""
+    val resolution: String = "",
+    val savedPath: String = ""  // 文件实际保存路径
 ) {
+    /**
+     * 显示的文件名（带后缀）
+     * 根据任务状态和文件类型自动添加后缀
+     */
+    val displayName: String
+        get() {
+            // 如果有 savedPath，从路径中提取文件名（包含后缀）
+            if (savedPath.isNotEmpty()) {
+                val fileName = savedPath.substringAfterLast("/")
+                if (fileName.isNotEmpty()) return fileName
+            }
+
+            // 根据状态判断后缀
+            val suffix = when (status) {
+                TaskStatus.COMPLETED -> {
+                    // 已完成状态，检查是否转码成功（通过 message 判断）
+                    if (message.contains("转码完成")) ".mp4" else ".ts"
+                }
+                TaskStatus.TRANSCODING -> ".mp4"  // 转码中，最终会是 mp4
+                else -> ".ts"  // 其他状态，当前是 ts 文件
+            }
+            return "$outputName$suffix"
+        }
+
     /**
      * 进度百分比文本
      */

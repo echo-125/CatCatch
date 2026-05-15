@@ -306,15 +306,18 @@ class DownloadService : Service() {
                 updateForegroundNotification()
             } else {
                 // 无转码，直接复制到 SAF
-                if (useSaf) {
+                val savedPath = if (useSaf) {
                     copyAndCleanup(mergedFile, task.outputName, safUriString!!, downloadDir)
+                } else {
+                    mergedFile.absolutePath
                 }
                 repository.updateTaskStatus(
                     taskId, TaskStatus.COMPLETED,
                     progress = 1f, downloaded = segments.size, total = segments.size,
-                    resolution = videoInfo.resolution, fileSize = mergedSize
+                    resolution = videoInfo.resolution, fileSize = mergedSize,
+                    savedPath = savedPath
                 )
-                NotificationUtil.showDownloadComplete(this, task.outputName, mergedFile.absolutePath)
+                NotificationUtil.showDownloadComplete(this, task.outputName, savedPath)
             }
 
         } catch (e: Exception) {
@@ -358,7 +361,8 @@ class DownloadService : Service() {
                 repository.updateTaskStatus(
                     taskId, TaskStatus.COMPLETED,
                     progress = 1f, message = "转码完成",
-                    resolution = finalResolution, fileSize = mp4Size
+                    resolution = finalResolution, fileSize = mp4Size,
+                    savedPath = savedPath
                 )
                 NotificationUtil.showDownloadComplete(this, outputName, savedPath)
             } else {
@@ -368,11 +372,13 @@ class DownloadService : Service() {
                 if (useSaf) {
                     val savedPath = copyAndCleanup(mergedFile, outputName, safUriString!!, downloadDir)
                     repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error",
-                        resolution = videoInfo.resolution, fileSize = mergedSize)
+                        resolution = videoInfo.resolution, fileSize = mergedSize,
+                        savedPath = savedPath)
                     NotificationUtil.showDownloadComplete(this, outputName, savedPath)
                 } else {
                     repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error",
-                        resolution = videoInfo.resolution, fileSize = mergedSize)
+                        resolution = videoInfo.resolution, fileSize = mergedSize,
+                        savedPath = mergedFile.absolutePath)
                     NotificationUtil.showDownloadComplete(this, outputName, mergedFile.absolutePath)
                 }
             }
@@ -436,7 +442,8 @@ class DownloadService : Service() {
             android.util.Log.e("DownloadService", "复制文件失败", e)
         }
 
-        return "已保存到选择的目录"
+        // 返回实际保存的文件名（带后缀）
+        return fileNameWithExt
     }
 
     private fun showNotification(fileName: String, message: String) {

@@ -1,5 +1,6 @@
 package com.catcatch.ui.home
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -79,17 +80,18 @@ fun HomeScreen(
             .fillMaxSize()
             .imePadding()
     ) {
-        // 内容区域
-        Column(
+        // 内容区域 - 使用 Box 实现真正的居中
+        Box(
             modifier = Modifier
                 .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
-            // 居中卡片，最大宽度 600dp，两侧16dp边距
             Column(
-                modifier = Modifier.widthIn(max = 600.dp),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+                    .widthIn(max = 600.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 AddTaskCard(

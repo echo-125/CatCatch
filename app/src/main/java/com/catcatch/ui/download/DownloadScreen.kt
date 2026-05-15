@@ -155,9 +155,9 @@ fun DownloadScreen(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                item { Spacer(modifier = Modifier.height(4.dp)) }
+                item { Spacer(modifier = Modifier.height(2.dp)) }
                 items(
                     items = tasks,
                     key = { it.id }
@@ -169,8 +169,6 @@ fun DownloadScreen(
                         onDelete = { viewModel.deleteTask(task.id) },
                         onCancel = { viewModel.cancelTask(task.id) },
                         onRetry = { viewModel.retryTask(task.id) },
-                        onOpenFolder = { viewModel.openFolder(task) },
-                        onPlay = { viewModel.playVideo(task) },
                         onLongClick = {
                             if (!isSelectionMode) {
                                 isSelectionMode = true

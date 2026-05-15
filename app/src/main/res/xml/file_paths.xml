@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
+    <!-- 内部存储根目录 -->
     <external-path name="external" path="." />
+    <!-- 应用外部文件目录 -->
     <external-files-path name="external_files" path="." />
+    <!-- 缓存目录 -->
     <cache-path name="cache" path="." />
+    <!-- SD 卡等所有路径（兼容 SD 卡存储） -->
+    <root-path name="root" path="." />
 </paths>
