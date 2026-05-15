@@ -30,7 +30,7 @@ fun MainScreen(
     val sharedViewModel: HomeViewModel = hiltViewModel()
     val taskListState by sharedViewModel.taskListState.collectAsState()
     val activeTaskCount = taskListState.tasks.count {
-        it.status == TaskStatus.DOWNLOADING || it.status == TaskStatus.PENDING || it.status == TaskStatus.MERGING
+        it.status == TaskStatus.DOWNLOADING || it.status == TaskStatus.PENDING || it.status == TaskStatus.MERGING || it.status == TaskStatus.TRANSCODING
     }
 
     AdaptiveNavigation(

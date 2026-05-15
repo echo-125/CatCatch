@@ -10,6 +10,8 @@ enum class TaskStatus {
     DOWNLOADING,
     /** 合并中 */
     MERGING,
+    /** 转码中 */
+    TRANSCODING,
     /** 已完成 */
     COMPLETED,
     /** 已失败 */

@@ -118,6 +118,27 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
+     * 智能粘贴，解析 "url|文件名|请求头" 格式
+     */
+    fun smartPaste(text: String) {
+        val parts = text.trim().split("|", limit = 3)
+        val url = parts[0].trim()
+        val fileName = parts.getOrNull(1)?.trim() ?: ""
+        val headers = parts.getOrNull(2)?.trim() ?: ""
+
+        _inputState.update {
+            it.copy(
+                url = url,
+                fileName = fileName,
+                headers = headers
+            )
+        }
+        savedStateHandle["url"] = url
+        savedStateHandle["fileName"] = fileName
+        savedStateHandle["headers"] = headers
+    }
+
+    /**
      * 更新文件名输入
      */
     fun onFileNameChange(fileName: String) {
@@ -420,7 +441,34 @@ class HomeViewModel @Inject constructor(
 
     private fun parseHeaders(headersStr: String): Map<String, String> {
         if (headersStr.isBlank()) return emptyMap()
-        return headersStr.lines()
+
+        val trimmed = headersStr.trim()
+
+        // 尝试解析 JSON 格式
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            try {
+                val map = mutableMapOf<String, String>()
+                val content = trimmed.removeSurrounding("{", "}")
+                // 简单解析 "key":"value" 格式
+                val pairs = content.split(",")
+                for (pair in pairs) {
+                    val keyValue = pair.split(":", limit = 2)
+                    if (keyValue.size == 2) {
+                        val key = keyValue[0].trim().removeSurrounding("\"")
+                        val value = keyValue[1].trim().removeSurrounding("\"")
+                        if (key.isNotEmpty() && value.isNotEmpty()) {
+                            map[key] = value
+                        }
+                    }
+                }
+                return map
+            } catch (e: Exception) {
+                // JSON 解析失败，尝试其他格式
+            }
+        }
+
+        // 尝试解析 "key: value" 格式（每行一个）
+        return trimmed.lines()
             .filter { it.contains(":") }
             .associate {
                 val parts = it.split(":", limit = 2)

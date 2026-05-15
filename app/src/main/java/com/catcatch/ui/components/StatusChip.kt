@@ -48,6 +48,7 @@ private fun getStatusColors(status: TaskStatus): Pair<Color, Color> {
         TaskStatus.PENDING -> StatusPending.copy(alpha = 0.2f) to StatusPending
         TaskStatus.DOWNLOADING -> StatusDownloading.copy(alpha = 0.2f) to StatusDownloading
         TaskStatus.MERGING -> StatusMerging.copy(alpha = 0.2f) to StatusMerging
+        TaskStatus.TRANSCODING -> StatusMerging.copy(alpha = 0.2f) to StatusMerging
         TaskStatus.COMPLETED -> StatusCompleted.copy(alpha = 0.2f) to StatusCompleted
         TaskStatus.FAILED -> StatusFailed.copy(alpha = 0.2f) to StatusFailed
         TaskStatus.CANCELLED -> StatusCancelled.copy(alpha = 0.2f) to StatusCancelled
@@ -59,6 +60,7 @@ private fun getStatusText(status: TaskStatus): String {
         TaskStatus.PENDING -> "等待中"
         TaskStatus.DOWNLOADING -> "下载中"
         TaskStatus.MERGING -> "合并中"
+        TaskStatus.TRANSCODING -> "转码中"
         TaskStatus.COMPLETED -> "已完成"
         TaskStatus.FAILED -> "失败"
         TaskStatus.CANCELLED -> "已取消"

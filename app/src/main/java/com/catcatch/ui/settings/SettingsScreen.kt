@@ -1,5 +1,12 @@
 package com.catcatch.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +22,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -24,6 +32,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -34,10 +43,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.catcatch.ui.components.CatCatchTopAppBar
+
+/**
+ * 从 SAF URI 提取显示路径
+ */
+private fun getDisplayPathFromUri(uri: Uri): String {
+    val docId = DocumentsContract.getTreeDocumentId(uri)
+    if (docId.startsWith("primary:")) {
+        return "/storage/emulated/0/${docId.removePrefix("primary:")}"
+    }
+    if (docId.contains(":")) {
+        val parts = docId.split(":")
+        if (parts.size == 2) {
+            return "/storage/${parts[0]}/${parts[1]}"
+        }
+    }
+    return uri.path ?: uri.toString()
+}
 
 /**
  * 设置页面
@@ -47,12 +75,43 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
 
-    var showDownloadDirDialog by remember { mutableStateOf(false) }
+    var showDirInputDialog by remember { mutableStateOf(false) }
     var showConcurrentTasksDialog by remember { mutableStateOf(false) }
     var showConcurrentSegmentsDialog by remember { mutableStateOf(false) }
     var showDarkModeDialog by remember { mutableStateOf(false) }
+    var showDirMethodDialog by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
+
+    // 监听事件
+    LaunchedEffect(Unit) {
+        viewModel.event.collect { event ->
+            when (event) {
+                is SettingsEvent.ShowMessage -> {
+                    Toast.makeText(context, event.message, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // SAF 目录选择器
+    val dirPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            // 获取持久化权限
+            try {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(it, flags)
+            } catch (e: Exception) {
+                android.util.Log.e("SettingsScreen", "获取持久化权限失败", e)
+            }
+            val displayPath = getDisplayPathFromUri(it)
+            viewModel.updateDownloadDirFromSaf(displayPath, it.toString())
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         CatCatchTopAppBar(title = "设置")
@@ -61,11 +120,27 @@ fun SettingsScreen(
             // 下载设置
             item {
                 SettingsSection(title = "下载设置") {
+                    // 目录选择方式
+                    SettingsItem(
+                        icon = Icons.Default.SwapHoriz,
+                        title = "目录选择方式",
+                        subtitle = if (state.useDirPicker) "目录选择器" else "手动输入路径",
+                        onClick = { showDirMethodDialog = true }
+                    )
+                    // 下载目录
                     SettingsItem(
                         icon = Icons.Default.Folder,
                         title = "下载目录",
                         subtitle = state.downloadDir,
-                        onClick = { showDownloadDirDialog = true }
+                        onClick = {
+                            if (state.useDirPicker) {
+                                // 直接启动 SAF
+                                dirPickerLauncher.launch(null)
+                            } else {
+                                // 弹出输入对话框
+                                showDirInputDialog = true
+                            }
+                        }
                     )
                     SettingsItem(
                         icon = Icons.Default.Speed,
@@ -91,7 +166,7 @@ fun SettingsScreen(
                         subtitle = "catcatch://add",
                         onClick = {
                             clipboardManager.setText(
-                                AnnotatedString("catcatch://add?url=&title=&headers=&referer=")
+                                AnnotatedString("""catcatch://add?url=&title=&headers={"origin":"","referer":""}""")
                             )
                         }
                     )
@@ -124,31 +199,108 @@ fun SettingsScreen(
         }
     }
 
-    // 下载目录对话框
-    if (showDownloadDirDialog) {
-        var dirText by remember { mutableStateOf(state.downloadDir) }
+    // 目录选择方式对话框
+    if (showDirMethodDialog) {
+        val options = listOf(true to "目录选择器", false to "手动输入路径")
+        var selected by remember { mutableStateOf(state.useDirPicker) }
         AlertDialog(
-            onDismissRequest = { showDownloadDirDialog = false },
-            title = { Text("下载目录") },
+            onDismissRequest = { showDirMethodDialog = false },
+            title = { Text("目录选择方式") },
             text = {
-                OutlinedTextField(
-                    value = dirText,
-                    onValueChange = { dirText = it },
-                    label = { Text("路径") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    options.forEach { (value, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = selected == value,
+                                    onClick = { selected = value }
+                                )
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = selected == value,
+                                onClick = { selected = value }
+                            )
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (dirText.isNotBlank()) {
-                        viewModel.updateDownloadDir(dirText.trim())
-                    }
-                    showDownloadDirDialog = false
+                    viewModel.updateUseDirPicker(selected)
+                    showDirMethodDialog = false
                 }) { Text("确定") }
             },
             dismissButton = {
-                TextButton(onClick = { showDownloadDirDialog = false }) { Text("取消") }
+                TextButton(onClick = { showDirMethodDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 手动输入路径对话框
+    if (showDirInputDialog) {
+        var dirText by remember { mutableStateOf(state.downloadDir) }
+        var pathError by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = { showDirInputDialog = false },
+            title = { Text("下载目录") },
+            text = {
+                Column {
+                    Text(
+                        text = "当前: ${state.downloadDir}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    OutlinedTextField(
+                        value = dirText,
+                        onValueChange = {
+                            dirText = it
+                            pathError = null
+                        },
+                        label = { Text("目录路径") },
+                        placeholder = { Text("/storage/emulated/0/Download/CatCatch") },
+                        singleLine = true,
+                        isError = pathError != null,
+                        supportingText = pathError?.let { { Text(it) } },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp)
+                    )
+
+                    Text(
+                        text = "仅支持内部存储路径:\n• /storage/emulated/0/...\n\n如需使用 SD 卡，请选择「目录选择器」方式",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val trimmed = dirText.trim()
+                    if (trimmed.isEmpty()) {
+                        pathError = "路径不能为空"
+                    } else if (!viewModel.isValidDirPath(trimmed)) {
+                        pathError = "路径格式无效，仅支持 /storage/emulated/0/"
+                    } else {
+                        viewModel.updateDownloadDir(trimmed)
+                        showDirInputDialog = false
+                    }
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDirInputDialog = false }) { Text("取消") }
             }
         )
     }

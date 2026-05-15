@@ -94,8 +94,8 @@ class DownloadRepository(
     /**
      * 解析 M3U8 URL
      */
-    suspend fun parseM3U8(url: String): Result<M3U8Data> {
-        return m3u8Parser.parse(url)
+    suspend fun parseM3U8(url: String, headers: Map<String, String> = emptyMap()): Result<M3U8Data> {
+        return m3u8Parser.parse(url, headers)
     }
 
     /**

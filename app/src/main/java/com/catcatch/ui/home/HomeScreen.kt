@@ -101,7 +101,8 @@ fun HomeScreen(
                     onFileNameChange = viewModel::onFileNameChange,
                     onHeadersChange = viewModel::onHeadersChange,
                     onAddTask = viewModel::addTask,
-                    onBatchAdd = viewModel::showBatchDialog
+                    onBatchAdd = viewModel::showBatchDialog,
+                    onSmartPaste = viewModel::smartPaste
                 )
             }
         }
@@ -139,7 +140,8 @@ private fun AddTaskCard(
     onFileNameChange: (String) -> Unit,
     onHeadersChange: (String) -> Unit,
     onAddTask: () -> Unit,
-    onBatchAdd: () -> Unit
+    onBatchAdd: () -> Unit,
+    onSmartPaste: (String) -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
     val cardShape = RoundedCornerShape(20.dp)
@@ -170,7 +172,8 @@ private fun AddTaskCard(
                     label = { Text("M3U8 链接") },
                     placeholder = { Text("https://example.com/video.m3u8") },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
+                    minLines = 2,
+                    maxLines = 4,
                     enabled = !isAdding,
                     shape = inputShape,
                     trailingIcon = {
@@ -181,11 +184,30 @@ private fun AddTaskCard(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ContentPaste,
-                                contentDescription = "粘贴"
+                                contentDescription = "粘贴 URL"
                             )
                         }
                     }
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 智能粘贴按钮
+                OutlinedButton(
+                    onClick = {
+                        clipboardManager.getText()?.text?.let { onSmartPaste(it) }
+                    },
+                    enabled = !isAdding,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = buttonShape
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentPaste,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text("智能粘贴（url|文件名|请求头）")
+                }
 
                 if (isCompactHeight) {
                     // 小窗口极简模式：只显示 URL 和开始按钮
@@ -210,7 +232,7 @@ private fun AddTaskCard(
                             value = headers,
                             onValueChange = onHeadersChange,
                             label = { Text("请求头（可选）") },
-                            placeholder = { Text("Referer: https://example.com") },
+                            placeholder = { Text("""{"origin":"https://example.com","referer":"https://example.com"}""") },
                             modifier = Modifier.fillMaxWidth(),
                             minLines = 2,
                             maxLines = 4,
@@ -252,7 +274,7 @@ private fun AddTaskCard(
                         value = headers,
                         onValueChange = onHeadersChange,
                         label = { Text("请求头（可选）") },
-                        placeholder = { Text("Referer: https://example.com") },
+                        placeholder = { Text("""{"origin":"https://example.com","referer":"https://example.com"}""") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
                         maxLines = 4,

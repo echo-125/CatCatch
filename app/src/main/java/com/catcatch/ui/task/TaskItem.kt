@@ -57,6 +57,7 @@ private fun getStatusColor(status: TaskStatus): Color = when (status) {
     TaskStatus.PENDING -> StatusPending
     TaskStatus.DOWNLOADING -> StatusDownloading
     TaskStatus.MERGING -> StatusMerging
+    TaskStatus.TRANSCODING -> StatusMerging
     TaskStatus.COMPLETED -> StatusCompleted
     TaskStatus.FAILED -> StatusFailed
     TaskStatus.CANCELLED -> StatusCancelled
@@ -151,7 +152,7 @@ fun TaskItem(
                     TaskStatus.DOWNLOADING -> DownloadingInfo(task)
                     TaskStatus.COMPLETED -> CompletedInfo(task, isSelectionMode)
                     TaskStatus.FAILED -> FailedInfo(task)
-                    TaskStatus.MERGING -> MergingInfo(task)
+                    TaskStatus.MERGING, TaskStatus.TRANSCODING -> MergingInfo(task)
                     else -> {}
                 }
 

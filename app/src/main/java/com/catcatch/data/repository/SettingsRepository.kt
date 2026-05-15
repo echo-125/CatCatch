@@ -20,6 +20,14 @@ class SettingsRepository @Inject constructor(
         it[AppPreferences.DOWNLOAD_DIR] ?: AppPreferences.DEFAULT_DOWNLOAD_DIR
     }
 
+    val downloadDirUri: Flow<String?> = dataStore.data.map {
+        it[AppPreferences.DOWNLOAD_DIR_URI]
+    }
+
+    val useDirPicker: Flow<Boolean> = dataStore.data.map {
+        it[AppPreferences.USE_DIR_PICKER] ?: AppPreferences.DEFAULT_USE_DIR_PICKER
+    }
+
     val maxConcurrentTasks: Flow<Int> = dataStore.data.map {
         it[AppPreferences.MAX_CONCURRENT_TASKS] ?: AppPreferences.DEFAULT_MAX_CONCURRENT_TASKS
     }
@@ -34,6 +42,20 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setDownloadDir(value: String) {
         dataStore.edit { it[AppPreferences.DOWNLOAD_DIR] = value }
+    }
+
+    suspend fun setDownloadDirUri(value: String?) {
+        dataStore.edit {
+            if (value != null) {
+                it[AppPreferences.DOWNLOAD_DIR_URI] = value
+            } else {
+                it.remove(AppPreferences.DOWNLOAD_DIR_URI)
+            }
+        }
+    }
+
+    suspend fun setUseDirPicker(value: Boolean) {
+        dataStore.edit { it[AppPreferences.USE_DIR_PICKER] = value }
     }
 
     suspend fun setMaxConcurrentTasks(value: Int) {

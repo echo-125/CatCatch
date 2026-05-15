@@ -98,28 +98,32 @@ app/src/main/java/com/catcatch/
 - **响应式布局**: 竖屏底部 NavigationBar，横屏左侧 NavigationRail
 - **状态持久化**: SavedStateHandle + configChanges 防止旋转丢失输入
 
-## 核心下载流程（5 步）
+## 核心下载流程（6 步）
 
 1. **下载播放列表** - HTTP GET 获取 M3U8 文本，多编码检测，验证 `#EXTM3U` 标记
-2. **解析分片 URL** - 递归解析（最大 5 层），主播放列表按带宽降序选最高码率，相对路径转绝对路径，循环引用检测
-3. **并发下载分片** - 协程 + Dispatchers.IO 并发（Semaphore 控制，默认 8 并发），断点续传，单分片重试 3 次（指数退避），批量重试 3 轮
-4. **合并分片** - 按顺序二进制合并所有 .ts 为 merged.ts
-5. **转换 MP4** - Android MediaExtractor + MediaMuxer 无损转码，注入 H.264 SPS/PPS，失败时保留 .ts
+2. **解析分片 URL** - 递归解析（最大 5 层），主播放列表按带宽降序选最高码率，相对路径转绝对路径，循环引用检测，解析 `#EXT-X-KEY` 提取加密信息（METHOD/URI/IV）
+3. **并发下载分片** - 协程 + Dispatchers.IO 并发（Semaphore 控制，默认 8 并发），断点续传，加密分片自动 AES-128-CBC 解密（密钥缓存），单分片重试 3 次（指数退避），批量重试 3 轮
+4. **合并分片** - 按顺序二进制合并所有 .ts 为 merged.ts，清理临时分片，标记任务完成释放槽位
+5. **后台转码** - 独立协程运行，不阻塞下载队列。Android MediaExtractor + MediaMuxer 无损转码，csd-0/csd-1 无效时注入 H.264 SPS/PPS（TS 包解析 + 原始字节扫描双保险），失败时保留 .ts
+6. **保存文件** - SAF 复制到用户选择的目录，清理临时文件
 
 ## 任务并发模型
 
-两层并发控制：
+两层并发控制 + 非阻塞转码：
 
 - **任务级**：最多 3 个下载任务同时运行（可配置 1-10），超出排队，任务完成后自动启动下一个
 - **分片级**：每个任务内协程并发下载 TS 分片（默认 8 并发，Semaphore 控制）
+- **转码**：下载合并完成后立即释放任务槽位，转码作为独立协程后台运行，不阻塞后续任务下载
+- **任务状态**：PENDING → DOWNLOADING → MERGING → COMPLETED → TRANSCODING → （转码完成/失败）
 
 ## 浏览器插件联动
 
 通过 URL Scheme `catcatch://add` 唤起 App，参数：
 - `url`（必填）：M3U8 播放列表 URL
 - `title`（可选）：视频标题，自动填充文件名
-- `headers`（可选）：自定义请求头 JSON
-- `referer`（可选）：快捷设置 Referer 头
+- `headers`（可选）：JSON 格式请求头，如 `{"origin":"https://example.com","referer":"https://example.com"}`
+
+格式：`catcatch://add?url=...&title=...&headers={"origin":"...","referer":"..."}`
 
 安全限制：仅允许 HTTP/HTTPS 协议，headers 过滤常用头，添加前展示完整信息。
 
@@ -144,8 +148,11 @@ app/src/main/java/com/catcatch/
 - [x] 主播放列表递归解析（自动选择最高码率，最大 5 层）
 - [x] 批量添加任务（BatchAddDialog，格式：链接|文件名）
 - [x] 自定义请求头（输入框 + Repository 传递）
-- [x] FFmpeg 转码集成（Android 原生 MediaExtractor + MediaMuxer）
+- [x] FFmpeg 转码集成（Android 原生 MediaExtractor + MediaMuxer + 手写 muxer 兜底）
 - [x] 后台下载服务（Foreground Service + 通知）
+- [x] AES-128-CBC 加密 M3U8 支持（解析 #EXT-X-KEY，密钥缓存，自动解密）
+- [x] 非阻塞转码（下载合并完成后释放槽位，转码独立协程后台运行）
+- [x] H.264 SPS/PPS 自动注入（csd-0/csd-1 无效时从 TS 提取，TS 包解析 + 原始字节扫描双保险）
 - [ ] 浏览器插件联动（Deep Link + 添加任务对话框）— URL Scheme 已定义，Activity 端未实现
 
 ### P3 - 体验优化（部分完成）
@@ -194,5 +201,7 @@ app/src/main/java/com/catcatch/
 - Navigation Compose 已引入，目前三个页面：Home、Downloads、Settings
 - 发布版启用 ProGuard 混淆（`isMinifyEnabled = true`）和资源缩减
 - 存储适配：Android 10+ 使用 MediaStore / SAF，默认保存到 `/storage/emulated/0/Download/CatCatch`
-- FFmpeg 转码使用 Android 原生 MediaExtractor + MediaMuxer，非 ffmpeg-kit 库
+- 转码方案：Android 原生 MediaExtractor + MediaMuxer（优先），手写 MP4 muxer（兜底），非 ffmpeg-kit
+- 加密支持：AES-128-CBC，密钥通过 HTTP 下载并缓存，IV 从 M3U8 解析或用媒体序列号生成
 - 配置变更（旋转）时 Activity 重建，通过 SavedStateHandle 保持输入状态
+- Segment 数据模型包含加密字段（encryptionMethod/keyUri/iv），未加密分片 isEncrypted=false 不受影响

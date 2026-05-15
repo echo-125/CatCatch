@@ -3,7 +3,9 @@ package com.catcatch.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.IBinder
+import androidx.documentfile.provider.DocumentFile
 import com.catcatch.data.repository.DownloadRepository
 import com.catcatch.data.repository.SettingsRepository
 import com.catcatch.domain.model.Segment
@@ -31,6 +33,7 @@ import javax.inject.Inject
 /**
  * 下载服务
  * 前台服务，保持后台下载
+ * 下载合并完成后立即释放任务槽位，转码作为独立协程后台运行
  */
 @AndroidEntryPoint
 class DownloadService : Service() {
@@ -41,9 +44,6 @@ class DownloadService : Service() {
         const val ACTION_CANCEL = "cancel"
         private const val FOREGROUND_NOTIFICATION_ID = 1000
 
-        /**
-         * 启动下载服务
-         */
         fun start(context: Context, taskId: Long) {
             val intent = Intent(context, DownloadService::class.java).apply {
                 putExtra(EXTRA_TASK_ID, taskId)
@@ -51,9 +51,6 @@ class DownloadService : Service() {
             context.startForegroundService(intent)
         }
 
-        /**
-         * 取消下载任务
-         */
         fun cancel(context: Context, taskId: Long) {
             val intent = Intent(context, DownloadService::class.java).apply {
                 putExtra(EXTRA_TASK_ID, taskId)
@@ -78,13 +75,14 @@ class DownloadService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeTasks = ConcurrentHashMap<Long, Job>()
     private val taskQueue = LinkedHashSet<Long>()
+    private val transcodeJobs = ConcurrentHashMap<Long, Job>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val taskId = intent?.getLongExtra(EXTRA_TASK_ID, -1) ?: -1
         if (taskId == -1L) {
-            stopSelf()
+            stopSelfIfIdle()
             return START_NOT_STICKY
         }
 
@@ -94,10 +92,8 @@ class DownloadService : Service() {
             return START_STICKY
         }
 
-        // 启动前台通知
         startForeground(FOREGROUND_NOTIFICATION_ID, createForegroundNotification())
 
-        // 添加到队列并尝试启动
         taskQueue.add(taskId)
         serviceScope.launch { tryStartNext() }
 
@@ -119,16 +115,15 @@ class DownloadService : Service() {
         }
 
         updateForegroundNotification()
-
-        if (activeTasks.isEmpty() && taskQueue.isEmpty()) {
-            stopSelf()
-        }
+        stopSelfIfIdle()
     }
 
     private fun cancelTask(taskId: Long) {
         activeTasks[taskId]?.cancel()
         activeTasks.remove(taskId)
         taskQueue.remove(taskId)
+        transcodeJobs[taskId]?.cancel()
+        transcodeJobs.remove(taskId)
         serviceScope.launch {
             repository.updateTaskStatus(taskId, TaskStatus.CANCELLED)
             tryStartNext()
@@ -136,9 +131,21 @@ class DownloadService : Service() {
     }
 
     private fun updateForegroundNotification() {
-        val count = activeTasks.size
-        val message = if (count > 0) "正在下载 $count 个任务" else "准备下载..."
+        val downloadCount = activeTasks.size
+        val transcodeCount = transcodeJobs.size
+        val message = when {
+            downloadCount > 0 && transcodeCount > 0 -> "下载 $downloadCount 个, 转码 $transcodeCount 个"
+            downloadCount > 0 -> "正在下载 $downloadCount 个任务"
+            transcodeCount > 0 -> "正在转码 $transcodeCount 个任务"
+            else -> "准备下载..."
+        }
         showNotification("猫抓助手", message)
+    }
+
+    private fun stopSelfIfIdle() {
+        if (activeTasks.isEmpty() && taskQueue.isEmpty() && transcodeJobs.isEmpty()) {
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
@@ -147,22 +154,21 @@ class DownloadService : Service() {
     }
 
     /**
-     * 下载任务
+     * 下载任务：解析 → 下载分片 → 合并 → 释放槽位 → 后台转码
      */
     private suspend fun downloadTask(taskId: Long) {
         try {
-            // 获取任务信息
             val task = repository.getTaskById(taskId) ?: return
 
-            // 更新状态为下载中
+            android.util.Log.d("DownloadService", "开始下载任务: $taskId, 输出目录: ${task.outputDir}, 输出文件名: ${task.outputName}")
+
             repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING)
 
             // 解析 M3U8
-            val m3u8Result = repository.parseM3U8(task.url)
+            val m3u8Result = repository.parseM3U8(task.url, task.headers)
             if (m3u8Result.isFailure) {
                 repository.updateTaskStatus(
-                    taskId,
-                    TaskStatus.FAILED,
+                    taskId, TaskStatus.FAILED,
                     message = "解析 M3U8 失败: ${m3u8Result.exceptionOrNull()?.message}"
                 )
                 showNotification(task.outputName, "解析失败")
@@ -172,17 +178,25 @@ class DownloadService : Service() {
             val m3u8Data = m3u8Result.getOrNull()!!
             val segments = m3u8Data.segments
 
-            // 更新总分片数
-            repository.updateTaskStatus(
-                taskId,
-                TaskStatus.DOWNLOADING,
-                total = segments.size
-            )
+            repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING, total = segments.size)
 
-            // 创建下载目录
-            val downloadDir = File(task.outputDir)
-            if (!downloadDir.exists()) {
-                downloadDir.mkdirs()
+            // 获取 SAF URI 和下载目录
+            val safUriString = settingsRepository.downloadDirUri.first()
+            val useSaf = safUriString != null
+
+            val downloadDir = if (useSaf) {
+                val transcodeDir = getExternalFilesDir("transcode")
+                val tempDir = if (transcodeDir != null) {
+                    File(transcodeDir, task.outputName)
+                } else {
+                    File(cacheDir, "downloads/${task.outputName}")
+                }
+                if (!tempDir.exists()) tempDir.mkdirs()
+                tempDir
+            } else {
+                val dir = File(task.outputDir)
+                if (!dir.exists()) dir.mkdirs()
+                dir
             }
 
             // 并发下载分片
@@ -192,7 +206,7 @@ class DownloadService : Service() {
             var lastUpdateTime = 0L
             val headers = task.headers
 
-            // 第一轮并发下载（带重试）
+            android.util.Log.d("DownloadService", "开始下载分片，并发数: $maxConcurrentSegments")
             coroutineScope {
                 segments.map { segment ->
                     async {
@@ -207,10 +221,8 @@ class DownloadService : Service() {
                                     val progress = count.toFloat() / segments.size
                                     serviceScope.launch {
                                         repository.updateTaskStatus(
-                                            taskId,
-                                            TaskStatus.DOWNLOADING,
-                                            progress = progress,
-                                            downloaded = count
+                                            taskId, TaskStatus.DOWNLOADING,
+                                            progress = progress, downloaded = count
                                         )
                                     }
                                 }
@@ -221,14 +233,13 @@ class DownloadService : Service() {
                 }.awaitAll()
             }
 
-            // 批量重试：检查失败的分片
+            // 批量重试失败分片
             var failedSegments = segments.filter { segment ->
                 val file = File(downloadDir, "segment_${segment.index}.ts")
                 !file.exists() || file.length() == 0L
             }
 
             if (failedSegments.isNotEmpty()) {
-                // 最多 3 轮批量重试
                 repeat(3) { round ->
                     if (failedSegments.isEmpty()) return@repeat
                     delay(2000L * (round + 1))
@@ -236,33 +247,20 @@ class DownloadService : Service() {
                     for (segment in failedSegments) {
                         val segmentFile = File(downloadDir, "segment_${segment.index}.ts")
                         val result = segmentDownloader.downloadWithRetry(segment, segmentFile, headers)
-                        if (result.isSuccess) {
-                            completedCount.incrementAndGet()
-                        } else {
-                            remaining.add(segment)
-                        }
+                        if (result.isSuccess) completedCount.incrementAndGet() else remaining.add(segment)
                     }
                     failedSegments = remaining
                 }
 
                 if (failedSegments.isNotEmpty()) {
-                    repository.updateTaskStatus(
-                        taskId,
-                        TaskStatus.FAILED,
-                        message = "${failedSegments.size} 个分片下载失败"
-                    )
+                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "${failedSegments.size} 个分片下载失败")
                     showNotification(task.outputName, "下载失败")
                     return
                 }
             }
 
             val downloaded = completedCount.get()
-            repository.updateTaskStatus(
-                taskId,
-                TaskStatus.DOWNLOADING,
-                progress = 1f,
-                downloaded = downloaded
-            )
+            repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING, progress = 1f, downloaded = downloaded)
 
             // 合并分片
             repository.updateTaskStatus(taskId, TaskStatus.MERGING)
@@ -276,54 +274,94 @@ class DownloadService : Service() {
                 File(downloadDir, "segment_$i.ts").delete()
             }
 
-            // FFmpeg 转码
-            val outputFile = if (ffmpegConverter.isAvailable()) {
-                showNotification(task.outputName, "转码中...")
-                val mp4File = File(downloadDir, "${task.outputName}.mp4")
-                val convertResult = ffmpegConverter.convertTsToMp4(mergedFile, mp4File)
-                if (convertResult.isSuccess) {
-                    // 转码成功，删除 TS 文件
-                    mergedFile.delete()
-                    mp4File
-                } else {
-                    // 转码失败，保留 TS 文件，记录错误
-                    val error = convertResult.exceptionOrNull()?.message ?: "未知错误"
-                    android.util.Log.e("DownloadService", "TS 转 MP4 失败: $error")
-                    mergedFile
+            // 合并完成，标记任务完成并释放槽位
+            repository.updateTaskStatus(
+                taskId, TaskStatus.COMPLETED,
+                progress = 1f, downloaded = segments.size, total = segments.size
+            )
+
+            // 启动后台转码（不阻塞任务队列）
+            if (ffmpegConverter.isAvailable()) {
+                val transcodeJob = serviceScope.launch {
+                    transcodeAndSave(taskId, task.outputName, mergedFile, downloadDir, useSaf, safUriString)
+                    transcodeJobs.remove(taskId)
+                    updateForegroundNotification()
+                    stopSelfIfIdle()
                 }
+                transcodeJobs[taskId] = transcodeJob
+                updateForegroundNotification()
             } else {
-                // FFmpeg 不可用，保留 TS 文件
-                mergedFile
+                // 无转码，直接复制到 SAF
+                if (useSaf) {
+                    copyAndCleanup(mergedFile, task.outputName, safUriString!!, downloadDir)
+                }
+                NotificationUtil.showDownloadComplete(this, task.outputName, mergedFile.absolutePath)
             }
 
-            // 更新任务完成
-            repository.updateTaskStatus(
-                taskId,
-                TaskStatus.COMPLETED,
-                progress = 1f,
-                downloaded = segments.size,
-                total = segments.size
-            )
-
-            // 显示完成通知
-            NotificationUtil.showDownloadComplete(
-                this,
-                task.outputName,
-                outputFile.absolutePath
-            )
-
         } catch (e: Exception) {
-            repository.updateTaskStatus(
-                taskId,
-                TaskStatus.FAILED,
-                message = e.message ?: "未知错误"
-            )
+            repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = e.message ?: "未知错误")
         }
     }
 
     /**
-     * 合并分片文件
+     * 后台转码 + SAF 复制（独立协程，不影响任务队列）
      */
+    private suspend fun transcodeAndSave(
+        taskId: Long,
+        outputName: String,
+        mergedFile: File,
+        downloadDir: File,
+        useSaf: Boolean,
+        safUriString: String?
+    ) {
+        try {
+            repository.updateTaskStatus(taskId, TaskStatus.TRANSCODING, message = "转码中...")
+            showNotification(outputName, "转码中...")
+
+            val mp4File = File(downloadDir, "$outputName.mp4")
+            val externalDir = getExternalFilesDir("transcode")
+            val convertResult = ffmpegConverter.convertTsToMp4(mergedFile, mp4File, externalDir)
+
+            if (convertResult.isSuccess) {
+                mergedFile.delete()
+                val savedPath = if (useSaf) {
+                    copyAndCleanup(mp4File, outputName, safUriString!!, downloadDir)
+                } else {
+                    mp4File.absolutePath
+                }
+                NotificationUtil.showDownloadComplete(this, outputName, savedPath)
+            } else {
+                val error = convertResult.exceptionOrNull()?.message ?: "转码未知错误"
+                android.util.Log.e("DownloadService", "转码失败: $error")
+                // 转码失败，保留 TS 文件
+                if (useSaf) {
+                    copyAndCleanup(mergedFile, outputName, safUriString!!, downloadDir)
+                }
+                repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error")
+                NotificationUtil.showDownloadComplete(this, outputName, mergedFile.absolutePath)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DownloadService", "转码异常", e)
+            repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码异常: ${e.message}")
+        }
+    }
+
+    /**
+     * 复制文件到 SAF 目录并清理临时目录
+     */
+    private fun copyAndCleanup(sourceFile: File, outputName: String, safUriString: String, downloadDir: File): String {
+        return try {
+            val safUri = Uri.parse(safUriString)
+            val result = copyFileToSaf(sourceFile, outputName, safUri)
+            sourceFile.delete()
+            downloadDir.deleteRecursively()
+            result
+        } catch (e: Exception) {
+            android.util.Log.e("DownloadService", "复制到 SAF 目录失败", e)
+            sourceFile.absolutePath
+        }
+    }
+
     private fun mergeSegments(downloadDir: File, segmentCount: Int, outputFile: File) {
         outputFile.outputStream().use { output ->
             for (i in 0 until segmentCount) {
@@ -337,24 +375,38 @@ class DownloadService : Service() {
         }
     }
 
-    /**
-     * 显示前台通知
-     */
+    private fun copyFileToSaf(sourceFile: File, outputName: String, safUri: Uri): String {
+        val dir = DocumentFile.fromTreeUri(this, safUri) ?: return "SAF 目录"
+
+        val extension = sourceFile.extension
+        val fileNameWithExt = "$outputName.$extension"
+        val mimeType = when (extension) {
+            "mp4" -> "video/mp4"
+            "ts" -> "video/mp2t"
+            else -> "application/octet-stream"
+        }
+
+        val targetFile = dir.createFile(mimeType, fileNameWithExt) ?: return "SAF 目录"
+
+        try {
+            contentResolver.openOutputStream(targetFile.uri)?.use { output ->
+                sourceFile.inputStream().use { input ->
+                    input.copyTo(output)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DownloadService", "复制文件失败", e)
+        }
+
+        return "已保存到选择的目录"
+    }
+
     private fun showNotification(fileName: String, message: String) {
-        val notification = NotificationUtil.createForegroundNotification(
-            this,
-            fileName,
-            message
-        )
+        val notification = NotificationUtil.createForegroundNotification(this, fileName, message)
         startForeground(FOREGROUND_NOTIFICATION_ID, notification)
     }
 
-    /**
-     * 创建前台通知
-     */
     private fun createForegroundNotification() = NotificationUtil.createForegroundNotification(
-        this,
-        "猫抓助手",
-        "准备下载..."
+        this, "猫抓助手", "准备下载..."
     )
 }

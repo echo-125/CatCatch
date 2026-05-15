@@ -67,7 +67,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 处理 Deep Link Intent
-     * 格式: catcatch://add?url=...&title=...&headers=...&referer=...
+     * 格式: catcatch://add?url=...&title=...&headers={"origin":"...","referer":"..."}
      */
     private fun handleDeepLink(intent: Intent?) {
         val uri = intent?.data ?: return
@@ -81,26 +81,43 @@ class MainActivity : ComponentActivity() {
         if (!url.startsWith("http://") && !url.startsWith("https://")) return
 
         val title = uri.getQueryParameter("title") ?: ""
-        val referer = uri.getQueryParameter("referer") ?: ""
         val headersParam = uri.getQueryParameter("headers") ?: ""
 
-        // 组装 headers
-        val headers = mutableMapOf<String, String>()
-        if (referer.isNotEmpty()) {
-            headers["Referer"] = referer
-        }
-        if (headersParam.isNotEmpty()) {
-            // headers 格式: "Key1=Value1&Key2=Value2"
-            headersParam.split("&").forEach { pair ->
-                val parts = pair.split("=", limit = 2)
-                if (parts.size == 2) {
-                    headers[parts[0].trim()] = parts[1].trim()
-                }
-            }
-        }
+        // 解析 headers JSON 格式: {"origin":"...","referer":"..."}
+        val headers = parseHeadersJson(headersParam)
 
         // 通过 Application 级别 SharedFlow 传递给 HomeViewModel
         val app = application as CatCatchApp
         app.deepLinkFlow.tryEmit(DeepLinkData(url, title, headers))
+    }
+
+    /**
+     * 解析 headers JSON 格式
+     * 支持: {"origin":"...","referer":"..."}
+     */
+    private fun parseHeadersJson(json: String): Map<String, String> {
+        if (json.isBlank()) return emptyMap()
+
+        val trimmed = json.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return emptyMap()
+
+        return try {
+            val map = mutableMapOf<String, String>()
+            val content = trimmed.removeSurrounding("{", "}")
+            val pairs = content.split(",")
+            for (pair in pairs) {
+                val keyValue = pair.split(":", limit = 2)
+                if (keyValue.size == 2) {
+                    val key = keyValue[0].trim().removeSurrounding("\"")
+                    val value = keyValue[1].trim().removeSurrounding("\"")
+                    if (key.isNotEmpty() && value.isNotEmpty()) {
+                        map[key] = value
+                    }
+                }
+            }
+            map
+        } catch (e: Exception) {
+            emptyMap()
+        }
     }
 }

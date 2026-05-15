@@ -37,6 +37,7 @@ data class DownloadTask(
             TaskStatus.PENDING -> "等待中"
             TaskStatus.DOWNLOADING -> "下载中"
             TaskStatus.MERGING -> "合并中"
+            TaskStatus.TRANSCODING -> "转码中"
             TaskStatus.COMPLETED -> "已完成"
             TaskStatus.FAILED -> "已失败"
             TaskStatus.CANCELLED -> "已取消"

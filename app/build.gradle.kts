@@ -87,4 +87,7 @@ dependencies {
 
     // DataStore
     implementation(libs.datastore.preferences)
+
+    // DocumentFile (SAF)
+    implementation(libs.documentfile)
 }
