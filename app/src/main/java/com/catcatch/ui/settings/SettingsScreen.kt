@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.VideoSettings
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -176,9 +177,15 @@ fun SettingsScreen(
                         subtitle = "catcatch://add",
                         onClick = {
                             clipboardManager.setText(
-                                AnnotatedString("""catcatch://add?url=&title=&headers={"origin":"","referer":""}""")
+                                AnnotatedString("""catcatch://add?url=&title=&headers={"origin":"","referer":""}&silent=true""")
                             )
                         }
+                    )
+                    SettingsItem(
+                        icon = Icons.Default.VisibilityOff,
+                        title = "静默添加模式",
+                        subtitle = if (state.silentMode) "Deep Link 自动添加任务，跳过确认" else "Deep Link 填充表单，手动确认",
+                        onClick = { viewModel.updateSilentMode(!state.silentMode) }
                     )
                 }
             }

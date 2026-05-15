@@ -46,6 +46,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="catcatch" android:host="add" />
             </intent-filter>
+            <!-- 浏览器分享链接 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
 
         <!-- FileProvider -->

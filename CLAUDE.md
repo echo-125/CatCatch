@@ -142,8 +142,14 @@ FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。
 - `url`（必填）：M3U8 播放列表 URL
 - `title`（可选）：视频标题，自动填充文件名
 - `headers`（可选）：JSON 格式请求头，如 `{"origin":"https://example.com","referer":"https://example.com"}`
+- `silent`（可选）：静默添加模式，`true` 时跳过确认直接添加任务
 
-格式：`catcatch://add?url=...&title=...&headers={"origin":"...","referer":"..."}`
+格式：`catcatch://add?url=...&title=...&headers={"origin":"...","referer":"..."}&silent=true`
+
+支持的触发方式：
+- **URL Scheme**：`catcatch://add?url=...` 格式
+- **浏览器分享**：接收 ACTION_SEND Intent（text/plain），自动提取 URL
+- **Deep Link**：http/https M3U8 链接（需在浏览器中打开）
 
 安全限制：仅允许 HTTP/HTTPS 协议，headers 过滤常用头，添加前展示完整信息。
 
@@ -173,15 +179,15 @@ FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。
 - [x] AES-128-CBC 加密 M3U8 支持（解析 #EXT-X-KEY，密钥缓存，自动解密）
 - [x] 非阻塞转码（下载合并完成后释放槽位，转码独立协程后台运行）
 - [x] H.264 SPS/PPS 自动注入（csd-0/csd-1 无效时从 TS 提取，TS 包解析 + 原始字节扫描双保险）
-- [ ] 浏览器插件联动（Deep Link + 添加任务对话框）— URL Scheme 已定义，Activity 端未实现
+- [x] 浏览器插件联动（Deep Link + 添加任务对话框）— URL Scheme、ACTION_SEND、静默模式
 
-### P3 - 体验优化（部分完成）
+### P3 - 体验优化（大部分完成）
 - [x] 剪贴板粘贴添加（ContentPaste 按钮）
-- [ ] 浏览器分享集成
+- [x] 浏览器分享集成（接收 ACTION_SEND Intent）
 - [ ] 仅 WiFi 下载选项
-- [x] 设置页面（下载目录、并发数、转码模式、缓存管理）
+- [x] 设置页面（下载目录、并发数、转码模式、缓存管理、静默模式）
 - [x] 深色模式（Theme.kt 已支持，跟随系统）
-- [ ] 静默添加模式
+- [x] 静默添加模式（全局开关 + URL 参数 `silent=true`）
 - [x] 视频信息展示（下载中显示时长+分片进度，完成后显示分辨率+时长+文件大小）
 - [x] 缓存管理（启动自动清理 + 设置页手动清理按钮）
 - [x] 应用图标（CatCatchBrowser 自适应图标移植）
@@ -201,13 +207,10 @@ FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。
 ## 待实现功能
 
 ### 高优先级
-- [ ] 浏览器 Deep Link 处理（MainActivity intent-filter + 解析逻辑）
-- [ ] DataStore 配置持久化（替代硬编码的下载目录和并发数）
+- [ ] DataStore 配置持久化（替代硬编码的下载目录和并发数）— 已完成，SettingsRepository 动态读取
 
 ### 中优先级
-- [ ] 浏览器分享集成（接收 ACTION_SEND Intent）
 - [ ] 仅 WiFi 下载选项
-- [ ] 静默添加模式（URL Scheme 触发时跳过确认）
 
 ### 低优先级
 - [ ] WorkManager 替代自定义 Foreground Service（更好的系统集成）

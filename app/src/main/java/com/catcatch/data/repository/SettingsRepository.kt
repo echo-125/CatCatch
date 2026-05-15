@@ -44,6 +44,10 @@ class SettingsRepository @Inject constructor(
         it[AppPreferences.TRANSCODE_MODE] ?: AppPreferences.DEFAULT_TRANSCODE_MODE
     }
 
+    val silentMode: Flow<Boolean> = dataStore.data.map {
+        it[AppPreferences.SILENT_MODE] ?: AppPreferences.DEFAULT_SILENT_MODE
+    }
+
     suspend fun setDownloadDir(value: String) {
         dataStore.edit { it[AppPreferences.DOWNLOAD_DIR] = value }
     }
@@ -76,5 +80,9 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setTranscodeMode(value: Int) {
         dataStore.edit { it[AppPreferences.TRANSCODE_MODE] = value }
+    }
+
+    suspend fun setSilentMode(value: Boolean) {
+        dataStore.edit { it[AppPreferences.SILENT_MODE] = value }
     }
 }

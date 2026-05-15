@@ -29,6 +29,7 @@ data class SettingsState(
     val maxConcurrentSegments: Int = AppPreferences.DEFAULT_MAX_CONCURRENT_SEGMENTS,
     val darkMode: Int = AppPreferences.DEFAULT_DARK_MODE,
     val transcodeMode: Int = AppPreferences.DEFAULT_TRANSCODE_MODE,
+    val silentMode: Boolean = AppPreferences.DEFAULT_SILENT_MODE,
     val cacheSize: Long = 0
 )
 
@@ -92,6 +93,11 @@ class SettingsViewModel @Inject constructor(
                     _state.update { it.copy(transcodeMode = value) }
                 }
             }
+            launch {
+                settingsRepository.silentMode.collect { value ->
+                    _state.update { it.copy(silentMode = value) }
+                }
+            }
         }
     }
 
@@ -135,6 +141,10 @@ class SettingsViewModel @Inject constructor(
 
     fun updateTranscodeMode(value: Int) {
         viewModelScope.launch { settingsRepository.setTranscodeMode(value) }
+    }
+
+    fun updateSilentMode(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setSilentMode(value) }
     }
 
     fun loadCacheSize() {

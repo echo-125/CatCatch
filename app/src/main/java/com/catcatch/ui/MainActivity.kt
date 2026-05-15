@@ -67,28 +67,60 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 处理 Deep Link Intent
-     * 格式: catcatch://add?url=...&title=...&headers={"origin":"...","referer":"..."}
+     * 支持: catcatch://add?url=...&title=...&headers=...&silent=true
+     * 支持: ACTION_SEND（浏览器分享）
      */
     private fun handleDeepLink(intent: Intent?) {
-        val uri = intent?.data ?: return
+        if (intent == null) return
 
-        // 验证 scheme 和 host
-        if (uri.scheme != "catcatch" || uri.host != "add") return
+        // 处理 ACTION_SEND（浏览器分享）
+        if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
+            val url = extractUrl(sharedText)
+            if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+                val title = intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: ""
+                val app = application as CatCatchApp
+                app.deepLinkChannel.trySend(DeepLinkData(url, title, emptyMap(), false))
+            }
+            return
+        }
 
-        val url = uri.getQueryParameter("url") ?: return
+        // 处理 Deep Link URI
+        val uri = intent.data ?: return
 
-        // 验证 URL 必须是 HTTP/HTTPS
-        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        when (uri.scheme) {
+            "catcatch" -> {
+                if (uri.host != "add") return
+                val url = uri.getQueryParameter("url") ?: return
+                if (!url.startsWith("http://") && !url.startsWith("https://")) return
+                val title = uri.getQueryParameter("title") ?: ""
+                val headersParam = uri.getQueryParameter("headers") ?: ""
+                val headers = parseHeadersJson(headersParam)
+                val silent = uri.getQueryParameter("silent") == "true"
+                val app = application as CatCatchApp
+                app.deepLinkChannel.trySend(DeepLinkData(url, title, headers, silent))
+            }
+            "http", "https" -> {
+                val url = uri.toString()
+                if (!url.endsWith(".m3u8", ignoreCase = true) &&
+                    !url.contains(".m3u8?", ignoreCase = true)) return
+                val app = application as CatCatchApp
+                app.deepLinkChannel.trySend(DeepLinkData(url, "", emptyMap(), false))
+            }
+        }
+    }
 
-        val title = uri.getQueryParameter("title") ?: ""
-        val headersParam = uri.getQueryParameter("headers") ?: ""
-
-        // 解析 headers JSON 格式: {"origin":"...","referer":"..."}
-        val headers = parseHeadersJson(headersParam)
-
-        // 通过 Application 级别 SharedFlow 传递给 HomeViewModel
-        val app = application as CatCatchApp
-        app.deepLinkFlow.tryEmit(DeepLinkData(url, title, headers))
+    /**
+     * 从分享文本中提取 URL
+     * 浏览器分享的内容可能是 "标题 https://example.com/video.m3u8" 或纯 URL
+     */
+    private fun extractUrl(text: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            return trimmed
+        }
+        val urlPattern = Regex("https?://\\S+")
+        return urlPattern.find(trimmed)?.value
     }
 
     /**

@@ -18,8 +18,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -82,15 +84,26 @@ class HomeViewModel @Inject constructor(
                 currentDownloadDir = dir
             }
         }
-        // 收集 Deep Link 数据
+        // 收集 Deep Link 数据（Channel 一次性消费，不会重复）
         viewModelScope.launch {
-            (context.applicationContext as CatCatchApp).deepLinkFlow.collect { data ->
-                _inputState.update {
-                    it.copy(
-                        url = data.url,
-                        fileName = data.title,
-                        headers = formatHeadersFromMap(data.headers)
-                    )
+            val app = context.applicationContext as CatCatchApp
+            app.deepLinkChannel.receiveAsFlow().collect { data ->
+                // 读取静默模式设置（优先使用 URL 参数，其次使用全局设置）
+                val globalSilentMode = settingsRepository.silentMode.first()
+                val shouldSilent = data.silent || globalSilentMode
+
+                if (shouldSilent) {
+                    // 静默模式：直接添加任务，不填充表单
+                    silentAddTask(data.url, data.title, data.headers)
+                } else {
+                    // 正常模式：填充表单，等待用户确认
+                    _inputState.update {
+                        it.copy(
+                            url = data.url,
+                            fileName = data.title,
+                            headers = formatHeadersFromMap(data.headers)
+                        )
+                    }
                 }
             }
         }
@@ -477,6 +490,44 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun getDownloadDir(): String = currentDownloadDir
+
+    /**
+     * 静默添加任务（跳过表单确认）
+     * 包含去重检查，避免重复添加相同 URL
+     */
+    private fun silentAddTask(url: String, title: String, headers: Map<String, String>) {
+        viewModelScope.launch {
+            try {
+                // 去重检查：跳过已存在的活跃任务
+                if (repository.hasActiveTask(url)) {
+                    _uiEventState.update {
+                        it.copy(success = "任务已存在，跳过重复添加")
+                    }
+                    return@launch
+                }
+
+                val baseFileName = title.trim().ifEmpty { generateFileName(url) }
+                val fileName = getUniqueFileName(baseFileName, getDownloadDir())
+
+                val taskId = repository.addTask(
+                    url = url,
+                    outputName = fileName,
+                    outputDir = getDownloadDir(),
+                    headers = headers
+                )
+
+                DownloadService.start(context, taskId)
+
+                _uiEventState.update {
+                    it.copy(success = "静默添加: $fileName")
+                }
+            } catch (e: Exception) {
+                _uiEventState.update {
+                    it.copy(error = "静默添加失败: ${e.message}")
+                }
+            }
+        }
+    }
 
     private fun formatHeadersFromMap(headers: Map<String, String>): String {
         if (headers.isEmpty()) return ""

@@ -169,6 +169,13 @@ class DownloadRepository(
     }
 
     /**
+     * 检查是否存在相同 URL 的活跃任务
+     */
+    suspend fun hasActiveTask(url: String): Boolean {
+        return taskDao.countActiveByUrl(url) > 0
+    }
+
+    /**
      * TaskEntity 转 DownloadTask
      */
     private fun TaskEntity.toDomain(): DownloadTask {

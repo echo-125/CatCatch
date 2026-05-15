@@ -72,4 +72,10 @@ interface TaskDao {
      */
     @Query("SELECT * FROM tasks WHERE status = :status")
     suspend fun getTasksByStatus(status: String): List<TaskEntity>
+
+    /**
+     * 检查是否存在相同 URL 的活跃任务（非完成/失败/取消）
+     */
+    @Query("SELECT COUNT(*) FROM tasks WHERE url = :url AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')")
+    suspend fun countActiveByUrl(url: String): Int
 }
