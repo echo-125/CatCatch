@@ -51,6 +51,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.catcatch.BuildConfig
 import com.catcatch.ui.components.CatCatchTopAppBar
 import com.catcatch.util.CacheManager
 
@@ -220,7 +221,7 @@ fun SettingsScreen(
                     SettingsItem(
                         icon = Icons.Default.Info,
                         title = "版本",
-                        subtitle = "1.0.0",
+                        subtitle = BuildConfig.VERSION_NAME,
                         onClick = { }
                     )
                 }

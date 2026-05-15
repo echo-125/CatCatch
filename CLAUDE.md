@@ -60,7 +60,7 @@ app/src/main/java/com/catcatch/
 │   ├── SegmentDownloader.kt # 单分片下载，断点续传，指数退避重试
 │   └── FFmpegConverter.kt   # Android MediaExtractor + MediaMuxer TS→MP4 转码 + 视频元信息提取
 ├── ui/
-│   ├── MainActivity.kt      # 单 Activity，enableEdgeToEdge()，计算 WindowSizeClass
+│   ├── MainActivity.kt      # 单 Activity，enableEdgeToEdge()，计算 WindowSizeClass，处理 Deep Link
 │   ├── components/          # 共享组件
 │   │   ├── CatCatchTopAppBar.kt   # 透明毛玻璃标题栏
 │   │   ├── ExpandableSection.kt   # 可折叠区域
@@ -68,17 +68,17 @@ app/src/main/java/com/catcatch/
 │   ├── download/DownloadScreen.kt # 下载任务列表，标题栏统计，双面板布局
 │   ├── home/
 │   │   ├── HomeScreen.kt         # 添加任务页，剪贴板粘贴，批量添加，小窗极简模式
-│   │   └── HomeViewModel.kt      # SavedStateHandle 持久化输入状态
+│   │   └── HomeViewModel.kt      # SavedStateHandle 持久化输入状态，Deep Link 处理
 │   ├── navigation/
 │   │   ├── AdaptiveNavigation.kt  # 响应式导航外壳（竖屏底部栏/横屏侧边栏）
 │   │   ├── BottomNavBar.kt        # 底部导航栏
-│   │   ├── MainScreen.kt         # 主界面容器
+│   │   ├── MainScreen.kt         # 主界面容器，共享 ViewModel
 │   │   ├── NavigationRailContent.kt # 侧边导航栏
 │   │   └── Screen.kt            # 导航路由定义
 │   ├── settings/
 │   │   ├── SettingsScreen.kt     # 设置页（LazyColumn 分组）
 │   │   └── SettingsSection.kt    # 设置分组标题
-│   ├── task/TaskItem.kt         # 任务卡片组件，状态特定信息展示
+│   ├── task/TaskItem.kt         # 任务卡片组件，紧凑布局，信息+操作按钮同行
 │   └── theme/
 │       ├── Color.kt             # 自定义颜色系统（Teal 主题 + 状态色）
 │       └── Theme.kt             # Material 3 主题配置
@@ -90,7 +90,10 @@ app/src/main/java/com/catcatch/
 
 ### 关键设计点
 
-- **ViewModel 状态管理**: `HomeViewModel` 持有 `HomeUiState` data class，通过 `MutableStateFlow` 驱动 UI
+- **ViewModel 状态管理**: `HomeViewModel` 持有 `InputState`、`TaskListState`、`UiEventState` 三个 data class，通过 `MutableStateFlow` 驱动 UI
+- **ViewModel 共享**: `MainScreen` 通过 `hiltViewModel()` 创建单个 `HomeViewModel` 实例，传递给 `HomeScreen` 和 `DownloadScreen`，避免多实例导致状态不同步
+- **Deep Link 处理**: `MainActivity` 解析 Intent 后设置 `CatCatchApp.pendingDeepLink`，`HomeViewModel` 延迟 100ms 后读取并消费，一次性使用后清空
+- **静默模式优先级**: 全局设置（`SettingsRepository.silentMode`）优先，忽略 URL 参数中的 `silent` 字段
 - **任务状态**: `TaskStatus` 枚举 — PENDING / DOWNLOADING / MERGING / TRANSCODING / COMPLETED / FAILED / CANCELLED
 - **数据转换**: `TaskEntity.toDomain()` 将数据库实体转为领域模型
 - **前台服务**: `DownloadService` 使用 `@AndroidEntryPoint`，`CoroutineScope(SupervisorJob() + Dispatchers.IO)`
@@ -142,16 +145,24 @@ FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。
 - `url`（必填）：M3U8 播放列表 URL
 - `title`（可选）：视频标题，自动填充文件名
 - `headers`（可选）：JSON 格式请求头，如 `{"origin":"https://example.com","referer":"https://example.com"}`
-- `silent`（可选）：静默添加模式，`true` 时跳过确认直接添加任务
 
-格式：`catcatch://add?url=...&title=...&headers={"origin":"...","referer":"..."}&silent=true`
+格式：`catcatch://add?url=...&title=...&headers={"origin":"...","referer":"..."}`
 
 支持的触发方式：
 - **URL Scheme**：`catcatch://add?url=...` 格式
 - **浏览器分享**：接收 ACTION_SEND Intent（text/plain），自动提取 URL
 - **Deep Link**：http/https M3U8 链接（需在浏览器中打开）
 
-安全限制：仅允许 HTTP/HTTPS 协议，headers 过滤常用头，添加前展示完整信息。
+### Deep Link 处理流程
+
+1. `MainActivity.handleDeepLink()` 解析 Intent，构建 `DeepLinkData` 对象
+2. 设置 `CatCatchApp.pendingDeepLink = DeepLinkData(...)`
+3. `HomeViewModel.init` 延迟 100ms 后读取 `pendingDeepLink`，消费后清空
+4. 根据全局静默模式设置决定行为：
+   - 静默模式开启：直接调用 `silentAddTask()` 添加任务
+   - 静默模式关闭：填充表单，等待用户确认
+
+安全限制：仅允许 HTTP/HTTPS 协议，headers 过滤常用头。
 
 ## 功能完成状态
 
@@ -187,7 +198,7 @@ FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。
 - [ ] 仅 WiFi 下载选项
 - [x] 设置页面（下载目录、并发数、转码模式、缓存管理、静默模式）
 - [x] 深色模式（Theme.kt 已支持，跟随系统）
-- [x] 静默添加模式（全局开关 + URL 参数 `silent=true`）
+- [x] 静默添加模式（全局设置优先，Deep Link 静默模式统一由设置页控制）
 - [x] 视频信息展示（下载中显示时长+分片进度，完成后显示分辨率+时长+文件大小）
 - [x] 缓存管理（启动自动清理 + 设置页手动清理按钮）
 - [x] 应用图标（CatCatchBrowser 自适应图标移植）
@@ -203,11 +214,10 @@ FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。
 - [x] 小窗极简模式（高度 <400dp 时只显示 URL + 按钮）
 - [x] SavedStateHandle 状态持久化
 - [x] imePadding 键盘适配
+- [x] 任务卡片紧凑布局（信息+操作按钮同行，图标按钮 28dp）
+- [x] ViewModel 共享（MainScreen 单实例，HomeScreen/DownloadScreen 共享）
 
 ## 待实现功能
-
-### 高优先级
-- [ ] DataStore 配置持久化（替代硬编码的下载目录和并发数）— 已完成，SettingsRepository 动态读取
 
 ### 中优先级
 - [ ] 仅 WiFi 下载选项
@@ -229,3 +239,5 @@ FFmpeg-kit 比系统原生快 8 倍以上，但系统原生时长精度更高。
 - 加密支持：AES-128-CBC，密钥通过 HTTP 下载并缓存，IV 从 M3U8 解析或用媒体序列号生成
 - 配置变更（旋转）时 Activity 重建，通过 SavedStateHandle 保持输入状态
 - Segment 数据模型包含加密字段（encryptionMethod/keyUri/iv），未加密分片 isEncrypted=false 不受影响
+- Deep Link 通过 `@Volatile pendingDeepLink` 变量传递，不使用 Channel/SharedFlow，避免多实例消费问题
+- 静默模式仅由全局设置控制，URL 参数中的 `silent` 字段已废弃
