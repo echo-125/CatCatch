@@ -63,7 +63,10 @@ class DownloadRepository(
         progress: Float = 0f,
         downloaded: Int = 0,
         total: Int = 0,
-        message: String = ""
+        message: String = "",
+        duration: Double? = null,
+        resolution: String? = null,
+        fileSize: Long? = null
     ) {
         val entity = taskDao.getTaskById(taskId) ?: return
         val updated = entity.copy(
@@ -71,7 +74,10 @@ class DownloadRepository(
             progress = progress,
             downloaded = downloaded,
             total = total,
-            message = message
+            message = message,
+            duration = duration ?: entity.duration,
+            resolution = resolution ?: entity.resolution,
+            fileSize = fileSize ?: entity.fileSize
         )
         taskDao.update(updated)
     }
@@ -89,6 +95,24 @@ class DownloadRepository(
      */
     suspend fun clearFinished() {
         taskDao.clearFinished()
+    }
+
+    /**
+     * 重置任务为待下载状态，清除旧的视频元信息
+     */
+    suspend fun resetTaskForRetry(taskId: Long) {
+        val entity = taskDao.getTaskById(taskId) ?: return
+        val updated = entity.copy(
+            status = TaskStatus.PENDING,
+            progress = 0f,
+            downloaded = 0,
+            total = 0,
+            message = "",
+            duration = 0.0,
+            resolution = "",
+            fileSize = 0
+        )
+        taskDao.update(updated)
     }
 
     /**
@@ -140,7 +164,10 @@ class DownloadRepository(
             downloaded = downloaded,
             total = total,
             message = message,
-            createdAt = createdAt
+            createdAt = createdAt,
+            duration = duration,
+            resolution = resolution,
+            fileSize = fileSize
         )
     }
 }

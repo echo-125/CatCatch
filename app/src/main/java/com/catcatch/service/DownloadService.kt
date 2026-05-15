@@ -162,7 +162,11 @@ class DownloadService : Service() {
 
             android.util.Log.d("DownloadService", "开始下载任务: $taskId, 输出目录: ${task.outputDir}, 输出文件名: ${task.outputName}")
 
-            repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING)
+            // 清除旧的视频元信息，避免重试时残留
+            repository.updateTaskStatus(
+                taskId, TaskStatus.DOWNLOADING,
+                duration = 0.0, resolution = "", fileSize = 0
+            )
 
             // 解析 M3U8
             val m3u8Result = repository.parseM3U8(task.url, task.headers)
@@ -178,7 +182,7 @@ class DownloadService : Service() {
             val m3u8Data = m3u8Result.getOrNull()!!
             val segments = m3u8Data.segments
 
-            repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING, total = segments.size)
+            repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING, total = segments.size, duration = m3u8Data.totalDuration)
 
             // 获取 SAF URI 和下载目录
             val safUriString = settingsRepository.downloadDirUri.first()
@@ -204,6 +208,7 @@ class DownloadService : Service() {
             val semaphore = Semaphore(maxConcurrentSegments)
             val completedCount = AtomicInteger(0)
             var lastUpdateTime = 0L
+            var fileSizeEstimated = 0L
             val headers = task.headers
 
             android.util.Log.d("DownloadService", "开始下载分片，并发数: $maxConcurrentSegments")
@@ -219,10 +224,20 @@ class DownloadService : Service() {
                                 if (now - lastUpdateTime > 500) {
                                     lastUpdateTime = now
                                     val progress = count.toFloat() / segments.size
+                                    // 估算总文件大小：已下载分片总大小 / 已下载数 * 总数
+                                    if (fileSizeEstimated == 0L && count >= 3) {
+                                        var downloadedBytes = 0L
+                                        for (i in 0 until count) {
+                                            val f = File(downloadDir, "segment_$i.ts")
+                                            if (f.exists()) downloadedBytes += f.length()
+                                        }
+                                        fileSizeEstimated = downloadedBytes / count * segments.size
+                                    }
                                     serviceScope.launch {
                                         repository.updateTaskStatus(
                                             taskId, TaskStatus.DOWNLOADING,
-                                            progress = progress, downloaded = count
+                                            progress = progress, downloaded = count,
+                                            fileSize = fileSizeEstimated
                                         )
                                     }
                                 }
@@ -274,17 +289,15 @@ class DownloadService : Service() {
                 File(downloadDir, "segment_$i.ts").delete()
             }
 
-            // 合并完成，标记任务完成并释放槽位
-            repository.updateTaskStatus(
-                taskId, TaskStatus.COMPLETED,
-                progress = 1f, downloaded = segments.size, total = segments.size
-            )
+            // 合并完成，提取视频信息
+            val mergedSize = mergedFile.length()
+            val videoInfo = ffmpegConverter.extractVideoInfo(mergedFile)
 
             // 启动后台转码（不阻塞任务队列）
             val transcodeMode = settingsRepository.transcodeMode.first()
             if (ffmpegConverter.isAvailable(transcodeMode)) {
                 val transcodeJob = serviceScope.launch {
-                    transcodeAndSave(taskId, task.outputName, mergedFile, downloadDir, useSaf, safUriString, transcodeMode)
+                    transcodeAndSave(taskId, task.outputName, mergedFile, downloadDir, useSaf, safUriString, transcodeMode, mergedSize, videoInfo)
                     transcodeJobs.remove(taskId)
                     updateForegroundNotification()
                     stopSelfIfIdle()
@@ -296,6 +309,11 @@ class DownloadService : Service() {
                 if (useSaf) {
                     copyAndCleanup(mergedFile, task.outputName, safUriString!!, downloadDir)
                 }
+                repository.updateTaskStatus(
+                    taskId, TaskStatus.COMPLETED,
+                    progress = 1f, downloaded = segments.size, total = segments.size,
+                    resolution = videoInfo.resolution, fileSize = mergedSize
+                )
                 NotificationUtil.showDownloadComplete(this, task.outputName, mergedFile.absolutePath)
             }
 
@@ -314,7 +332,9 @@ class DownloadService : Service() {
         downloadDir: File,
         useSaf: Boolean,
         safUriString: String?,
-        transcodeMode: Int = 0
+        transcodeMode: Int = 0,
+        mergedSize: Long = 0,
+        videoInfo: FFmpegConverter.VideoInfo = FFmpegConverter.VideoInfo()
     ) {
         try {
             repository.updateTaskStatus(taskId, TaskStatus.TRANSCODING, message = "转码中...")
@@ -325,6 +345,10 @@ class DownloadService : Service() {
             val convertResult = ffmpegConverter.convertTsToMp4(mergedFile, mp4File, externalDir, transcodeMode)
 
             if (convertResult.isSuccess) {
+                // 在 SAF 复制前先提取信息（copyAndCleanup 会删除源文件）
+                val mp4VideoInfo = ffmpegConverter.extractVideoInfo(mp4File)
+                val mp4Size = mp4File.length()
+                val finalResolution = mp4VideoInfo.resolution.ifEmpty { videoInfo.resolution }
                 mergedFile.delete()
                 val savedPath = if (useSaf) {
                     copyAndCleanup(mp4File, outputName, safUriString!!, downloadDir)
@@ -333,7 +357,8 @@ class DownloadService : Service() {
                 }
                 repository.updateTaskStatus(
                     taskId, TaskStatus.COMPLETED,
-                    progress = 1f, message = "转码完成"
+                    progress = 1f, message = "转码完成",
+                    resolution = finalResolution, fileSize = mp4Size
                 )
                 NotificationUtil.showDownloadComplete(this, outputName, savedPath)
             } else {
@@ -342,10 +367,12 @@ class DownloadService : Service() {
                 // 转码失败，保留 TS 文件，复制到 SAF
                 if (useSaf) {
                     val savedPath = copyAndCleanup(mergedFile, outputName, safUriString!!, downloadDir)
-                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error")
+                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error",
+                        resolution = videoInfo.resolution, fileSize = mergedSize)
                     NotificationUtil.showDownloadComplete(this, outputName, savedPath)
                 } else {
-                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error")
+                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码失败: $error",
+                        resolution = videoInfo.resolution, fileSize = mergedSize)
                     NotificationUtil.showDownloadComplete(this, outputName, mergedFile.absolutePath)
                 }
             }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CleanHands
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
@@ -50,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.catcatch.ui.components.CatCatchTopAppBar
+import com.catcatch.util.CacheManager
 
 /**
  * 从 SAF URI 提取显示路径
@@ -189,6 +191,18 @@ fun SettingsScreen(
                         title = "深色模式",
                         subtitle = darkModeLabel(state.darkMode),
                         onClick = { showDarkModeDialog = true }
+                    )
+                }
+            }
+
+            // 缓存管理
+            item {
+                SettingsSection(title = "缓存管理") {
+                    SettingsItem(
+                        icon = Icons.Default.CleanHands,
+                        title = "清除缓存",
+                        subtitle = "当前缓存: ${CacheManager.formatSize(state.cacheSize)}",
+                        onClick = { viewModel.clearCache() }
                     )
                 }
             }

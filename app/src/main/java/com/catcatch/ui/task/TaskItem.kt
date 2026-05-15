@@ -302,10 +302,15 @@ private fun DownloadingInfo(task: DownloadTask) {
         }
     }
 
-    // 分片信息
+    // 分片信息 + 时长
+    val parts = mutableListOf<String>()
+    if (task.durationText.isNotEmpty()) parts.add(task.durationText)
     if (task.total > 0) {
+        parts.add("分片: ${task.downloaded}/${task.total}")
+    }
+    if (parts.isNotEmpty()) {
         Text(
-            text = "分片: ${task.downloaded}/${task.total}",
+            text = parts.joinToString(" · "),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -317,25 +322,31 @@ private fun DownloadingInfo(task: DownloadTask) {
  */
 @Composable
 private fun CompletedInfo(task: DownloadTask, isSelectionMode: Boolean) {
+    // 视频属性行：分辨率 · 时长 · 文件大小
+    val infoParts = mutableListOf<String>()
+    if (task.resolutionText.isNotEmpty()) infoParts.add(task.resolutionText)
+    if (task.durationText.isNotEmpty()) infoParts.add(task.durationText)
+    if (task.fileSize > 0) infoParts.add(task.fileSizeText)
+    if (infoParts.isNotEmpty()) {
+        Text(
+            text = infoParts.joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    // 完成时间行
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 多选模式下不显示勾选图标，用复选框代替
         if (!isSelectionMode) {
             Icon(
                 imageVector = Icons.Default.CheckCircle,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
                 tint = StatusCompleted
-            )
-        }
-        if (task.fileSize > 0) {
-            Text(
-                text = task.fileSizeText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         if (task.completedAt != null) {

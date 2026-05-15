@@ -4,6 +4,8 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.util.Log
+import com.catcatch.util.CacheManager
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.flow.MutableSharedFlow
 
@@ -32,6 +34,13 @@ class CatCatchApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // 启动时自动清理缓存
+        Thread {
+            val cleared = CacheManager.clearCache(this)
+            if (cleared > 0) {
+                Log.i("CatCatchApp", "启动清理缓存: ${CacheManager.formatSize(cleared)}")
+            }
+        }.start()
     }
 
     /**

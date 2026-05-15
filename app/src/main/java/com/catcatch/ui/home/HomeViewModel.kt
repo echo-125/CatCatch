@@ -235,7 +235,7 @@ class HomeViewModel @Inject constructor(
      */
     fun retryTask(taskId: Long) {
         viewModelScope.launch {
-            repository.updateTaskStatus(taskId, TaskStatus.PENDING)
+            repository.resetTaskForRetry(taskId)
             DownloadService.start(context, taskId)
         }
     }

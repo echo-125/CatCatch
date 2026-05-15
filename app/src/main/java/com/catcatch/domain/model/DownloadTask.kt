@@ -21,7 +21,9 @@ data class DownloadTask(
     val completedAt: Long? = null,
     val fileSize: Long = 0,
     val speed: Long = 0, // bytes per second
-    val outputPath: String = ""
+    val outputPath: String = "",
+    val duration: Double = 0.0,
+    val resolution: String = ""
 ) {
     /**
      * 进度百分比文本
@@ -42,6 +44,29 @@ data class DownloadTask(
             TaskStatus.FAILED -> "已失败"
             TaskStatus.CANCELLED -> "已取消"
         }
+
+    /**
+     * 格式化的视频时长
+     */
+    val durationText: String
+        get() {
+            if (duration <= 0) return ""
+            val totalSeconds = duration.toLong()
+            val hours = totalSeconds / 3600
+            val minutes = (totalSeconds % 3600) / 60
+            val seconds = totalSeconds % 60
+            return if (hours > 0) {
+                "%d:%02d:%02d".format(hours, minutes, seconds)
+            } else {
+                "%d:%02d".format(minutes, seconds)
+            }
+        }
+
+    /**
+     * 格式化的分辨率
+     */
+    val resolutionText: String
+        get() = resolution
 
     /**
      * 格式化的文件大小

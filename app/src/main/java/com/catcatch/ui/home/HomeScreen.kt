@@ -206,7 +206,7 @@ private fun AddTaskCard(
                         contentDescription = null,
                         modifier = Modifier.padding(end = 8.dp)
                     )
-                    Text("智能粘贴（url|文件名|请求头）")
+                    Text("智能粘贴")
                 }
 
                 if (isCompactHeight) {

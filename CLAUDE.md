@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-CatCatch（猫抓助手）- M3U8 视频流下载器，从 Windows 桌面版（Python + ttkbootstrap）移植到 Android。
+CatCatch（猫抓）- M3U8 视频流下载器，从 Windows 桌面版（Python + ttkbootstrap）移植到 Android。
 
 **个人项目，以快速开发快速验证为主**，优先实现核心功能跑通流程，不过度设计。
 
@@ -50,7 +50,7 @@ UI (Compose) ←→ ViewModel (StateFlow) ←→ Repository
 app/src/main/java/com/catcatch/
 ├── CatCatchApp.kt           # Application 入口，Hilt 容器 + 通知渠道注册
 ├── data/
-│   ├── local/               # AppDatabase (Room v1), TaskDao (Flow 响应式查询), TaskEntity
+│   ├── local/               # AppDatabase (Room v3), TaskDao (Flow 响应式查询), TaskEntity
 │   ├── remote/              # M3U8Parser（多编码检测、相对路径解析、递归嵌套）
 │   └── repository/          # DownloadRepository（封装 DAO + Parser）
 ├── di/AppModule.kt          # Hilt 全局单例（OkHttp, DB, DAO, Parser, Downloader, Repository）
@@ -58,7 +58,7 @@ app/src/main/java/com/catcatch/
 ├── service/
 │   ├── DownloadService.kt   # 前台服务，协程并发下载 → 合并 → 转码，任务队列管理
 │   ├── SegmentDownloader.kt # 单分片下载，断点续传，指数退避重试
-│   └── FFmpegConverter.kt   # Android MediaExtractor + MediaMuxer TS→MP4 转码
+│   └── FFmpegConverter.kt   # Android MediaExtractor + MediaMuxer TS→MP4 转码 + 视频元信息提取
 ├── ui/
 │   ├── MainActivity.kt      # 单 Activity，enableEdgeToEdge()，计算 WindowSizeClass
 │   ├── components/          # 共享组件
@@ -83,6 +83,7 @@ app/src/main/java/com/catcatch/
 │       ├── Color.kt             # 自定义颜色系统（Teal 主题 + 状态色）
 │       └── Theme.kt             # Material 3 主题配置
 └── util/
+    ├── CacheManager.kt          # 缓存管理（计算大小、清理临时文件）
     ├── NotificationUtil.kt      # 通知工具
     └── PermissionUtil.kt        # 权限工具
 ```
@@ -90,13 +91,15 @@ app/src/main/java/com/catcatch/
 ### 关键设计点
 
 - **ViewModel 状态管理**: `HomeViewModel` 持有 `HomeUiState` data class，通过 `MutableStateFlow` 驱动 UI
-- **任务状态**: `TaskStatus` 枚举 — PENDING / DOWNLOADING / MERGING / COMPLETED / FAILED / CANCELLED
+- **任务状态**: `TaskStatus` 枚举 — PENDING / DOWNLOADING / MERGING / TRANSCODING / COMPLETED / FAILED / CANCELLED
 - **数据转换**: `TaskEntity.toDomain()` 将数据库实体转为领域模型
 - **前台服务**: `DownloadService` 使用 `@AndroidEntryPoint`，`CoroutineScope(SupervisorJob() + Dispatchers.IO)`
 - **M3U8 解析**: 编码探测顺序 utf-8 → big5 → gbk → gb2312 → apparent_encoding，使用 `URI.resolve()` 处理相对路径
 - **权限适配**: Android 13+ POST_NOTIFICATIONS 运行时权限，存储权限 maxSdkVersion 限制
 - **响应式布局**: 竖屏底部 NavigationBar，横屏左侧 NavigationRail
 - **状态持久化**: SavedStateHandle + configChanges 防止旋转丢失输入
+- **视频元信息**: TaskEntity 持久化 duration/resolution/fileSize，DownloadService 在解析/下载/转码各阶段采集，重试时自动清除
+- **缓存管理**: CacheManager 统一管理 cacheDir 和 transcode 目录，启动时自动清理 + 设置页手动清理
 
 ## 核心下载流程（6 步）
 
@@ -159,9 +162,12 @@ app/src/main/java/com/catcatch/
 - [x] 剪贴板粘贴添加（ContentPaste 按钮）
 - [ ] 浏览器分享集成
 - [ ] 仅 WiFi 下载选项
-- [x] 设置页面（基础框架，功能项为占位）
+- [x] 设置页面（下载目录、并发数、转码模式、缓存管理）
 - [x] 深色模式（Theme.kt 已支持，跟随系统）
 - [ ] 静默添加模式
+- [x] 视频信息展示（下载中显示时长+分片进度，完成后显示分辨率+时长+文件大小）
+- [x] 缓存管理（启动自动清理 + 设置页手动清理按钮）
+- [x] 应用图标（CatCatchBrowser 自适应图标移植）
 
 ### UI 重构（已完成）
 - [x] 自定义 Teal 主题（#0D9488 主色，#F8FAFC 浅色背景，#0F172A 深色背景）
@@ -179,14 +185,12 @@ app/src/main/java/com/catcatch/
 
 ### 高优先级
 - [ ] 浏览器 Deep Link 处理（MainActivity intent-filter + 解析逻辑）
-- [ ] 设置页功能实现（下载目录选择、并发数配置、深色模式切换）
 - [ ] DataStore 配置持久化（替代硬编码的下载目录和并发数）
 
 ### 中优先级
 - [ ] 浏览器分享集成（接收 ACTION_SEND Intent）
 - [ ] 仅 WiFi 下载选项
 - [ ] 静默添加模式（URL Scheme 触发时跳过确认）
-- [ ] 下载速度和剩余时间实时显示（DownloadTask 扩展字段已预留）
 
 ### 低优先级
 - [ ] WorkManager 替代自定义 Foreground Service（更好的系统集成）

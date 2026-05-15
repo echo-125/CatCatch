@@ -2,9 +2,12 @@ package com.catcatch.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.content.Context
 import com.catcatch.data.local.AppPreferences
 import com.catcatch.data.repository.SettingsRepository
+import com.catcatch.util.CacheManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -25,7 +28,8 @@ data class SettingsState(
     val maxConcurrentTasks: Int = AppPreferences.DEFAULT_MAX_CONCURRENT_TASKS,
     val maxConcurrentSegments: Int = AppPreferences.DEFAULT_MAX_CONCURRENT_SEGMENTS,
     val darkMode: Int = AppPreferences.DEFAULT_DARK_MODE,
-    val transcodeMode: Int = AppPreferences.DEFAULT_TRANSCODE_MODE
+    val transcodeMode: Int = AppPreferences.DEFAULT_TRANSCODE_MODE,
+    val cacheSize: Long = 0
 )
 
 /**
@@ -40,7 +44,8 @@ sealed interface SettingsEvent {
  */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsState())
@@ -50,6 +55,7 @@ class SettingsViewModel @Inject constructor(
     val event: SharedFlow<SettingsEvent> = _event.asSharedFlow()
 
     init {
+        loadCacheSize()
         viewModelScope.launch {
             launch {
                 settingsRepository.downloadDir.collect { dir ->
@@ -129,6 +135,21 @@ class SettingsViewModel @Inject constructor(
 
     fun updateTranscodeMode(value: Int) {
         viewModelScope.launch { settingsRepository.setTranscodeMode(value) }
+    }
+
+    fun loadCacheSize() {
+        viewModelScope.launch {
+            val size = CacheManager.getCacheSize(context)
+            _state.update { it.copy(cacheSize = size) }
+        }
+    }
+
+    fun clearCache() {
+        viewModelScope.launch {
+            CacheManager.clearCache(context)
+            _state.update { it.copy(cacheSize = 0) }
+            _event.emit(SettingsEvent.ShowMessage("缓存已清除"))
+        }
     }
 
     /**

@@ -68,6 +68,57 @@ class FFmpegConverter {
     }
 
     /**
+     * 视频元信息
+     */
+    data class VideoInfo(
+        val width: Int = 0,
+        val height: Int = 0,
+        val durationUs: Long = 0
+    ) {
+        val resolution: String
+            get() = if (width > 0 && height > 0) "${width}x${height}" else ""
+    }
+
+    /**
+     * 提取视频文件的元信息（分辨率、时长）
+     * 失败时返回空信息，不阻塞主流程
+     */
+    fun extractVideoInfo(file: File): VideoInfo {
+        return try {
+            if (!file.exists()) return VideoInfo()
+            val extractor = MediaExtractor()
+            try {
+                extractor.setDataSource(file.absolutePath)
+                for (i in 0 until extractor.trackCount) {
+                    val format = extractor.getTrackFormat(i)
+                    val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                    if (mime.startsWith("video/")) {
+                        val width = format.getIntegerOrDefault(MediaFormat.KEY_WIDTH, 0)
+                        val height = format.getIntegerOrDefault(MediaFormat.KEY_HEIGHT, 0)
+                        val durationUs = format.getLongOrDefault(MediaFormat.KEY_DURATION, 0L)
+                        Log.i(TAG, "视频元信息: ${width}x${height}, 时长=${durationUs}us")
+                        return VideoInfo(width, height, durationUs)
+                    }
+                }
+                VideoInfo()
+            } finally {
+                extractor.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "提取视频元信息失败: ${e.message}")
+            VideoInfo()
+        }
+    }
+
+    private fun MediaFormat.getIntegerOrDefault(name: String, default: Int): Int {
+        return try { if (containsKey(name)) getInteger(name) else default } catch (_: Exception) { default }
+    }
+
+    private fun MediaFormat.getLongOrDefault(name: String, default: Long): Long {
+        return try { if (containsKey(name)) getLong(name) else default } catch (_: Exception) { default }
+    }
+
+    /**
      * 将 TS 文件转换为 MP4
      * @param transcodeMode 转码模式: 0=自动, 1=FFmpeg-kit, 2=系统原生
      */

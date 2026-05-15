@@ -20,5 +20,8 @@ data class TaskEntity(
     val downloaded: Int = 0,
     val total: Int = 0,
     val message: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val duration: Double = 0.0,
+    val resolution: String = "",
+    val fileSize: Long = 0
 )
