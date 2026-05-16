@@ -18,6 +18,14 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.coroutineContext
 
 /**
+ * 分片下载异常，携带 HTTP 状态码
+ */
+class DownloadException(
+    message: String,
+    val httpCode: Int = -1
+) : Exception(message)
+
+/**
  * 分片下载器
  * 支持单分片下载、进度回调、取消支持、AES-128-CBC 流式解密
  */
@@ -55,7 +63,7 @@ class SegmentDownloader(private val client: OkHttpClient) {
             val response = client.newCall(request).execute()
             try {
                 if (!response.isSuccessful) {
-                    throw Exception("下载分片失败: HTTP ${response.code}")
+                    throw DownloadException("HTTP ${response.code}", response.code)
                 }
 
                 val body = response.body ?: throw Exception("响应内容为空")

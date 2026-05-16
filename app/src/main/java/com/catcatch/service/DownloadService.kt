@@ -287,7 +287,7 @@ class DownloadService : Service() {
             }
             Log.i(taskTag, "[$taskId] 首轮下载完成: ${completedCount.get()}/${segments.size}, 耗时=${(System.currentTimeMillis() - downloadStartTime) / 1000}s")
 
-            // 批量重试失败分片
+            // 批量重试失败分片（支持 401 鉴权过期自动刷新 URL）
             var failedSegments = segments.withIndex().filter { (ordinal, _) ->
                 val file = segmentFile(downloadDir, ordinal)
                 !file.exists() || file.length() == 0L
@@ -295,25 +295,47 @@ class DownloadService : Service() {
 
             if (failedSegments.isNotEmpty()) {
                 Log.w(taskTag, "[$taskId] ${failedSegments.size} 个分片需要重试: ${failedSegments.map { it.index }}")
+                var currentSegments = segments
+
                 repeat(3) { round ->
                     if (failedSegments.isEmpty()) return@repeat
                     val waitMs = 2000L * (round + 1)
                     Log.i(taskTag, "[$taskId] 批量重试第 ${round + 1}/3 轮, 等待 ${waitMs}ms...")
                     delay(waitMs)
-                    val remaining = mutableListOf<IndexedValue<Segment>>()
-                    for ((ordinal, segment) in failedSegments) {
-                        val file = segmentFile(downloadDir, ordinal)
-                        val result = segmentDownloader.downloadWithRetry(segment, file, headers)
-                        if (result.isSuccess) completedCount.incrementAndGet() else remaining.add(IndexedValue(ordinal, segment))
+
+                    val result = retryFailedSegments(failedSegments, currentSegments, downloadDir, headers, completedCount)
+
+                    // 检查是否有 401 鉴权失败
+                    if (result.has401) {
+                        Log.i(taskTag, "[$taskId] 检测到 401 鉴权过期，尝试刷新 M3U8 播放列表...")
+                        val refreshed = refreshSegmentsFromM3U8(task.url, task.headers)
+                        if (refreshed != null && refreshed.size == segments.size) {
+                            currentSegments = refreshed
+                            Log.i(taskTag, "[$taskId] M3U8 刷新成功，使用新 URL 重试...")
+                            // 用新 URL 立即重试一次
+                            val retryResult = retryFailedSegments(result.remaining, currentSegments, downloadDir, headers, completedCount)
+                            if (retryResult.remaining.isEmpty()) {
+                                failedSegments = emptyList()
+                                return@repeat
+                            }
+                            Log.w(taskTag, "[$taskId] 新 URL 重试后仍有 ${retryResult.remaining.size} 个失败")
+                            failedSegments = retryResult.remaining
+                        } else {
+                            Log.e(taskTag, "[$taskId] M3U8 刷新失败")
+                            failedSegments = result.remaining
+                        }
+                    } else {
+                        Log.i(taskTag, "[$taskId] 重试第 ${round + 1} 轮完成: 成功=${failedSegments.size - result.remaining.size}, 仍失败=${result.remaining.size}")
+                        failedSegments = result.remaining
                     }
-                    Log.i(taskTag, "[$taskId] 重试第 ${round + 1} 轮完成: 成功=${failedSegments.size - remaining.size}, 仍失败=${remaining.size}")
-                    failedSegments = remaining
                 }
 
                 if (failedSegments.isNotEmpty()) {
-                    Log.e(taskTag, "[$taskId] ${failedSegments.size} 个分片最终失败，任务中止")
-                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "${failedSegments.size} 个分片下载失败")
-                    showNotification(task.outputName, "下载失败")
+                    val sampleErrors = failedSegments.take(3).joinToString { "#${it.index}" }
+                    val errorMsg = "${failedSegments.size} 个分片下载失败 (例: $sampleErrors)"
+                    Log.e(taskTag, "[$taskId] $errorMsg，任务中止")
+                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = errorMsg)
+                    showNotification(task.outputName, "下载失败: ${failedSegments.size} 个分片无法下载")
                     return
                 }
             }
@@ -466,6 +488,60 @@ class DownloadService : Service() {
 
     private fun segmentFile(downloadDir: File, ordinal: Int): File {
         return File(downloadDir, "segment_$ordinal.ts")
+    }
+
+    /**
+     * 重试失败分片的结果
+     */
+    private data class RetryResult(
+        val remaining: List<IndexedValue<Segment>>,
+        val has401: Boolean
+    )
+
+    /**
+     * 重试一批失败分片，返回剩余失败列表和是否有 401 错误
+     */
+    private suspend fun retryFailedSegments(
+        failed: List<IndexedValue<Segment>>,
+        segments: List<Segment>,
+        downloadDir: File,
+        headers: Map<String, String>,
+        completedCount: AtomicInteger
+    ): RetryResult {
+        var has401 = false
+        val remaining = mutableListOf<IndexedValue<Segment>>()
+        for ((ordinal, _) in failed) {
+            val segment = segments[ordinal]
+            val file = segmentFile(downloadDir, ordinal)
+            val result = segmentDownloader.downloadWithRetry(segment, file, headers)
+            if (result.isSuccess) {
+                completedCount.incrementAndGet()
+            } else {
+                remaining.add(IndexedValue(ordinal, segment))
+                val ex = result.exceptionOrNull()
+                if (ex is DownloadException && ex.httpCode == 401) {
+                    has401 = true
+                }
+            }
+        }
+        return RetryResult(remaining, has401)
+    }
+
+    /**
+     * 重新解析 M3U8 获取新的分片 URL（含新鉴权 token）
+     * 返回 null 表示刷新失败
+     */
+    private suspend fun refreshSegmentsFromM3U8(
+        url: String,
+        headers: Map<String, String>
+    ): List<Segment>? {
+        return try {
+            val result = repository.parseM3U8(url, headers)
+            result.getOrNull()?.segments
+        } catch (e: Exception) {
+            Log.e(TAG, "刷新 M3U8 失败: ${e.message}")
+            null
+        }
     }
 
     private data class SafCopyResult(val displayName: String, val uri: Uri)
