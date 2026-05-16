@@ -57,12 +57,15 @@ class M3U8Parser(private val client: OkHttpClient) {
         val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
-        if (!response.isSuccessful) {
-            throw Exception("HTTP ${response.code}: ${response.message}")
+        try {
+            if (!response.isSuccessful) {
+                throw Exception("HTTP ${response.code}: ${response.message}")
+            }
+            val bytes = response.body?.bytes() ?: throw Exception("响应内容为空")
+            return tryDecodeContent(bytes)
+        } finally {
+            response.close()
         }
-
-        val bytes = response.body?.bytes() ?: throw Exception("响应内容为空")
-        return tryDecodeContent(bytes)
     }
 
     private fun isMasterPlaylist(content: String): Boolean {
@@ -239,11 +242,22 @@ class M3U8Parser(private val client: OkHttpClient) {
             // 读取 value（可能被引号包围）
             val value = if (i < attrString.length && attrString[i] == '"') {
                 i++ // 跳过开头引号
-                val valueStart = i
-                while (i < attrString.length && attrString[i] != '"') i++
-                val v = attrString.substring(valueStart, i)
+                val sb = StringBuilder()
+                while (i < attrString.length) {
+                    if (attrString[i] == '\\' && i + 1 < attrString.length) {
+                        // 转义字符：跳过反斜杠，取下一个字符
+                        i++
+                        sb.append(attrString[i])
+                        i++
+                    } else if (attrString[i] == '"') {
+                        break
+                    } else {
+                        sb.append(attrString[i])
+                        i++
+                    }
+                }
                 if (i < attrString.length) i++ // 跳过结尾引号
-                v
+                sb.toString()
             } else {
                 val valueStart = i
                 while (i < attrString.length && attrString[i] != ',') i++
@@ -293,7 +307,9 @@ class M3U8Parser(private val client: OkHttpClient) {
             return url
         }
         val baseUri = URI(baseUrl)
-        val resolvedUri = baseUri.resolve(url)
+        // 去除 query 和 fragment，避免将 base URL 的参数附加到相对路径上
+        val cleanBase = URI(baseUri.scheme, baseUri.authority, baseUri.path, null, null)
+        val resolvedUri = cleanBase.resolve(url)
         return resolvedUri.toString()
     }
 }

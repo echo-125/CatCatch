@@ -234,7 +234,7 @@ class FFmpegConverter {
             Log.i(TAG, "尝试复制到 getExternalFilesDir 再转码...")
             val altFile = File(externalFilesDir, inputTsFile.name)
             try {
-                if (!altFile.parentFile?.exists()!!) altFile.parentFile?.mkdirs()
+                if (altFile.parentFile?.exists() != true) altFile.parentFile?.mkdirs()
                 inputTsFile.copyTo(altFile, overwrite = true)
                 val altExtractor = createInitializedExtractor(altFile)
                 if (altExtractor != null) {
@@ -266,20 +266,24 @@ class FFmpegConverter {
 
     private fun createInitializedExtractor(file: File): MediaExtractor? {
         for (attempt in 1..EXTRACTOR_MAX_RETRIES) {
+            var e1: MediaExtractor? = null
             try {
-                val e = MediaExtractor()
-                e.setDataSource(file.absolutePath)
-                return e
+                e1 = MediaExtractor()
+                e1.setDataSource(file.absolutePath)
+                return e1
             } catch (e: Exception) {
                 Log.w(TAG, "MediaExtractor 第 $attempt 次失败: ${e.message}")
+                try { e1?.release() } catch (_: Exception) {}
                 if (attempt < EXTRACTOR_MAX_RETRIES) Thread.sleep(EXTRACTOR_RETRY_DELAY_MS)
             }
+            var e2: MediaExtractor? = null
             try {
-                val e = MediaExtractor()
-                FileInputStream(file).use { fis -> e.setDataSource(fis.fd) }
-                return e
+                e2 = MediaExtractor()
+                FileInputStream(file).use { fis -> e2.setDataSource(fis.fd) }
+                return e2
             } catch (e: Exception) {
                 Log.w(TAG, "MediaExtractor fd 第 $attempt 次失败: ${e.message}")
+                try { e2?.release() } catch (_: Exception) {}
                 if (attempt < EXTRACTOR_MAX_RETRIES) Thread.sleep(EXTRACTOR_RETRY_DELAY_MS)
             }
         }
@@ -790,7 +794,7 @@ class FFmpegConverter {
                 // 提取 NAL start code（视频 PID 的数据）
                 if (videoPid != -1 && pid == videoPid) {
                     val currentPts = videoPidPtsMap[pid]
-                    scanNalInPayload(packet, payloadOffset, 188, currentPts, nalEntries)
+                    scanNalInPayload(packet, payloadOffset, 188, currentPts, raf.filePointer - 188, nalEntries)
                 }
             }
         }
@@ -837,7 +841,7 @@ class FFmpegConverter {
      */
     private fun scanNalInPayload(
         packet: ByteArray, start: Int, end: Int,
-        pts: Long?, nalEntries: MutableList<NalEntry>
+        pts: Long?, packetFileOffset: Long, nalEntries: MutableList<NalEntry>
     ) {
         var i = start
         while (i < end - 3) {
@@ -853,8 +857,8 @@ class FFmpegConverter {
                 val nalStart = i + scLen
                 if (nalStart < end) {
                     val nalType = packet[nalStart].toInt() and 0x1F
-                    // 记录全局偏移（近似值，因为是单包扫描）
-                    nalEntries.add(NalEntry(-1L, nalType, pts))
+                    // 记录 NAL 数据起始的全局文件偏移
+                    nalEntries.add(NalEntry(packetFileOffset + nalStart, nalType, pts))
                 }
                 i += scLen
             } else {
@@ -935,8 +939,15 @@ class FFmpegConverter {
             raf.write(moovData)
 
             // mdat
-            raf.write(intToBytes(mdatSize.toInt())) // size
-            raf.write("mdat".toByteArray()) // type
+            if (mdatSize > Int.MAX_VALUE) {
+                // 扩展大小：size=1, 后跟 64 位实际大小
+                raf.write(intToBytes(1))
+                raf.write("mdat".toByteArray())
+                raf.write(longToBytes(mdatSize))
+            } else {
+                raf.write(intToBytes(mdatSize.toInt()))
+                raf.write("mdat".toByteArray())
+            }
 
             // 写入帧数据
             val buffer = ByteArray(64 * 1024)
@@ -1296,6 +1307,15 @@ class FFmpegConverter {
         )
     }
 
+    private fun longToBytes(v: Long): ByteArray {
+        return byteArrayOf(
+            (v shr 56).toByte(), (v shr 48).toByte(),
+            (v shr 40).toByte(), (v shr 32).toByte(),
+            (v shr 24).toByte(), (v shr 16).toByte(),
+            (v shr 8).toByte(), v.toByte()
+        )
+    }
+
     private fun injectCodecData(format: MediaFormat, sps: ByteArray, pps: ByteArray): MediaFormat {
         val csd0 = ByteArray(4 + sps.size)
         csd0[0] = 0x00; csd0[1] = 0x00; csd0[2] = 0x00; csd0[3] = 0x01
@@ -1313,7 +1333,7 @@ class FFmpegConverter {
         val maxScan = minOf(file.length(), 50 * 1024 * 1024L) // 扫描前 50MB
         var sps: ByteArray? = null
         var pps: ByteArray? = null
-        val pesBuffers = mutableMapOf<Int, MutableList<Byte>>()
+        val pesBuffers = mutableMapOf<Int, java.io.ByteArrayOutputStream>()
         var videoPid = -1
 
         RandomAccessFile(file, "r").use { raf ->
@@ -1340,31 +1360,31 @@ class FFmpegConverter {
                 if (videoPid == -1) {
                     if (pusi) {
                         for ((pk, buf) in pesBuffers) {
-                            if (buf.size > 100) {
+                            if (buf.size() > 100) {
                                 val r = parsePesForH264(buf.toByteArray())
                                 if (r.first != null) { videoPid = pk; sps = r.first; pps = r.second; break }
                             }
                         }
                         if (videoPid != -1) break
                     }
-                    val buf = pesBuffers.getOrPut(pid) { mutableListOf() }
-                    for (i in po until 188) buf.add(packet[i])
-                    if (buf.size > 2 * 1024 * 1024) buf.clear()
+                    val buf = pesBuffers.getOrPut(pid) { java.io.ByteArrayOutputStream() }
+                    buf.write(packet, po, 188 - po)
+                    if (buf.size() > 2 * 1024 * 1024) buf.reset()
                 } else if (pid == videoPid) {
-                    val buf = pesBuffers.getOrPut(pid) { mutableListOf() }
-                    if (pusi && buf.isNotEmpty()) {
+                    val buf = pesBuffers.getOrPut(pid) { java.io.ByteArrayOutputStream() }
+                    if (pusi && buf.size() > 0) {
                         val r = parsePesForH264(buf.toByteArray())
                         if (r.first != null && sps == null) sps = r.first
                         if (r.second != null && pps == null) pps = r.second
-                        buf.clear()
+                        buf.reset()
                         if (sps != null && pps != null) return Pair(sps, pps)
                     }
-                    for (i in po until 188) buf.add(packet[i])
-                    if (buf.size > 5 * 1024 * 1024) buf.clear()
+                    buf.write(packet, po, 188 - po)
+                    if (buf.size() > 5 * 1024 * 1024) buf.reset()
                 }
             }
             for ((_, buf) in pesBuffers) {
-                if (buf.size > 100 && (sps == null || pps == null)) {
+                if (buf.size() > 100 && (sps == null || pps == null)) {
                     val r = parsePesForH264(buf.toByteArray())
                     if (r.first != null && sps == null) sps = r.first
                     if (r.second != null && pps == null) pps = r.second

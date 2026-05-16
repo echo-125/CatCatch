@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
 import javax.crypto.spec.IvParameterSpec
@@ -27,8 +28,8 @@ class SegmentDownloader(private val client: OkHttpClient) {
         private const val BUFFER_SIZE = 8192
     }
 
-    // 密钥缓存：keyUri -> 16 字节密钥
-    private val keyCache = mutableMapOf<String, ByteArray>()
+    // 密钥缓存：keyUri -> 16 字节密钥（多协程并发访问，使用 ConcurrentHashMap）
+    private val keyCache = ConcurrentHashMap<String, ByteArray>()
 
     suspend fun download(
         segment: Segment,
@@ -37,42 +38,49 @@ class SegmentDownloader(private val client: OkHttpClient) {
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            if (outputFile.exists() && outputFile.length() > 0) {
-                onProgress(outputFile.length(), outputFile.length())
-                return@runCatching
-            }
-
             val requestBuilder = Request.Builder().url(segment.url)
             headers.forEach { (key, value) -> requestBuilder.addHeader(key, value) }
             val request = requestBuilder.build()
 
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                throw Exception("下载分片失败: HTTP ${response.code}")
-            }
+            try {
+                if (!response.isSuccessful) {
+                    throw Exception("下载分片失败: HTTP ${response.code}")
+                }
 
-            val body = response.body ?: throw Exception("响应内容为空")
-            val contentLength = body.contentLength()
+                val body = response.body ?: throw Exception("响应内容为空")
+                val contentLength = body.contentLength()
 
-            if (segment.isEncrypted && segment.keyUri != null) {
-                // 加密分片：CipherInputStream 流式解密写入
-                downloadAndDecryptStream(segment, body.byteStream(), outputFile, onProgress, contentLength, headers)
-            } else {
-                // 非加密分片：直接流式写入
-                body.byteStream().use { inputStream ->
-                    FileOutputStream(outputFile).use { outputStream ->
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        var downloaded = 0L
-                        var bytesRead: Int
+                // 断点续传：文件已存在且大小匹配时跳过
+                if (outputFile.exists() && outputFile.length() > 0) {
+                    if (contentLength <= 0 || outputFile.length() == contentLength) {
+                        onProgress(outputFile.length(), outputFile.length())
+                        return@runCatching
+                    }
+                    // 大小不匹配，删除不完整文件重新下载
+                    outputFile.delete()
+                }
 
-                        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                            coroutineContext.ensureActive()
-                            outputStream.write(buffer, 0, bytesRead)
-                            downloaded += bytesRead
-                            onProgress(downloaded, contentLength)
+                if (segment.isEncrypted && segment.keyUri != null) {
+                    downloadAndDecryptStream(segment, body.byteStream(), outputFile, onProgress, contentLength, headers)
+                } else {
+                    body.byteStream().use { inputStream ->
+                        FileOutputStream(outputFile).use { outputStream ->
+                            val buffer = ByteArray(BUFFER_SIZE)
+                            var downloaded = 0L
+                            var bytesRead: Int
+
+                            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                                coroutineContext.ensureActive()
+                                outputStream.write(buffer, 0, bytesRead)
+                                downloaded += bytesRead
+                                onProgress(downloaded, contentLength)
+                            }
                         }
                     }
                 }
+            } finally {
+                response.close()
             }
         }
     }

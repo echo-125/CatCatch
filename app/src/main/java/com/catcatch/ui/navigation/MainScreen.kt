@@ -4,7 +4,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
@@ -30,8 +32,13 @@ fun MainScreen(
     // 共享 ViewModel，避免重复创建导致 Deep Link 数据被多次处理
     val sharedViewModel: HomeViewModel = hiltViewModel()
     val taskListState by sharedViewModel.taskListState.collectAsState()
-    val activeTaskCount = taskListState.tasks.count {
-        it.status == TaskStatus.DOWNLOADING || it.status == TaskStatus.PENDING || it.status == TaskStatus.MERGING || it.status == TaskStatus.TRANSCODING
+    val activeTaskCount by remember(taskListState) {
+        derivedStateOf {
+            taskListState.tasks.count {
+                it.status == TaskStatus.DOWNLOADING || it.status == TaskStatus.PENDING ||
+                    it.status == TaskStatus.MERGING || it.status == TaskStatus.TRANSCODING
+            }
+        }
     }
 
     AdaptiveNavigation(

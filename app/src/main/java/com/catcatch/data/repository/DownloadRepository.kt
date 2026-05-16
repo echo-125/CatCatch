@@ -113,7 +113,8 @@ class DownloadRepository(
             message = "",
             duration = 0.0,
             resolution = "",
-            fileSize = 0
+            fileSize = 0,
+            savedPath = ""
         )
         taskDao.update(updated)
     }

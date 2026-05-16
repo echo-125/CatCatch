@@ -80,6 +80,8 @@ class DownloadService : Service() {
     private val taskQueue = LinkedHashSet<Long>()
     private val transcodeJobs = ConcurrentHashMap<Long, Job>()
     private val schedulerMutex = Mutex()
+    // 进度更新锁：确保同一任务的进度更新串行执行，避免协程泄漏
+    private val progressMutexes = ConcurrentHashMap<Long, Mutex>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -130,13 +132,14 @@ class DownloadService : Service() {
     }
 
     private fun cancelTask(taskId: Long) {
-        activeTasks[taskId]?.cancel()
-        activeTasks.remove(taskId)
-        transcodeJobs[taskId]?.cancel()
-        transcodeJobs.remove(taskId)
         serviceScope.launch {
             schedulerMutex.withLock {
+                activeTasks[taskId]?.cancel()
+                activeTasks.remove(taskId)
+                transcodeJobs[taskId]?.cancel()
+                transcodeJobs.remove(taskId)
                 taskQueue.remove(taskId)
+                progressMutexes.remove(taskId)
             }
             repository.updateTaskStatus(taskId, TaskStatus.CANCELLED)
             tryStartNext()
@@ -247,11 +250,15 @@ class DownloadService : Service() {
                                         fileSizeEstimated = downloadedBytes / count * segments.size
                                     }
                                     serviceScope.launch {
-                                        repository.updateTaskStatus(
-                                            taskId, TaskStatus.DOWNLOADING,
-                                            progress = progress, downloaded = count,
-                                            fileSize = fileSizeEstimated
-                                        )
+                                        // 串行化进度更新，避免协程泄漏
+                                        val mutex = progressMutexes.getOrPut(taskId) { Mutex() }
+                                        mutex.withLock {
+                                            repository.updateTaskStatus(
+                                                taskId, TaskStatus.DOWNLOADING,
+                                                progress = progress, downloaded = count,
+                                                fileSize = fileSizeEstimated
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -407,18 +414,14 @@ class DownloadService : Service() {
 
     /**
      * 复制文件到 SAF 目录并清理临时目录
+     * 失败时抛出异常，不静默回退
      */
     private fun copyAndCleanup(sourceFile: File, outputName: String, safUriString: String, downloadDir: File): String {
-        return try {
-            val safUri = Uri.parse(safUriString)
-            val result = copyFileToSaf(sourceFile, outputName, safUri)
-            sourceFile.delete()
-            downloadDir.deleteRecursively()
-            result.displayName
-        } catch (e: Exception) {
-            android.util.Log.e("DownloadService", "复制到 SAF 目录失败", e)
-            sourceFile.absolutePath
-        }
+        val safUri = Uri.parse(safUriString)
+        val result = copyFileToSaf(sourceFile, outputName, safUri)
+        sourceFile.delete()
+        downloadDir.deleteRecursively()
+        return result.displayName
     }
 
     private fun mergeSegments(downloadDir: File, segmentCount: Int, outputFile: File) {

@@ -127,6 +127,7 @@ class MainActivity : ComponentActivity() {
     /**
      * 解析 headers JSON 格式
      * 支持: {"origin":"...","referer":"..."}
+     * 仅允许安全的请求头，防止 SSRF/信息泄露
      */
     private fun parseHeadersJson(json: String): Map<String, String> {
         if (json.isBlank()) return emptyMap()
@@ -138,6 +139,8 @@ class MainActivity : ComponentActivity() {
             val jsonObject = JSONObject(trimmed)
             val map = LinkedHashMap<String, String>()
             jsonObject.keys().forEach { key ->
+                val lowerKey = key.lowercase()
+                if (lowerKey !in ALLOWED_HEADERS) return@forEach
                 val value = jsonObject.optString(key)
                 if (key.isNotBlank() && value.isNotBlank()) {
                     map[key] = value
@@ -147,5 +150,14 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             emptyMap()
         }
+    }
+
+    companion object {
+        /** Deep Link 允许传入的 HTTP 请求头白名单 */
+        private val ALLOWED_HEADERS = setOf(
+            "referer", "origin", "user-agent",
+            "accept", "accept-language", "accept-encoding",
+            "connection"
+        )
     }
 }

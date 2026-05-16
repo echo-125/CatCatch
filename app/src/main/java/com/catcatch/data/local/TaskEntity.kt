@@ -1,13 +1,14 @@
 package com.catcatch.data.local
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.catcatch.domain.model.TaskStatus
 
 /**
  * 下载任务数据库实体
  */
-@Entity(tableName = "tasks")
+@Entity(tableName = "tasks", indices = [Index(value = ["status"])])
 data class TaskEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

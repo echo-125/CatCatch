@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -52,51 +53,50 @@ class SettingsViewModel @Inject constructor(
     private val _state = MutableStateFlow(SettingsState())
     val state: StateFlow<SettingsState> = _state.asStateFlow()
 
-    private val _event = MutableSharedFlow<SettingsEvent>()
+    private val _event = MutableSharedFlow<SettingsEvent>(extraBufferCapacity = 1)
     val event: SharedFlow<SettingsEvent> = _event.asSharedFlow()
 
     init {
         loadCacheSize()
         viewModelScope.launch {
-            launch {
-                settingsRepository.downloadDir.collect { dir ->
-                    _state.update { it.copy(downloadDir = dir) }
+            combine(
+                settingsRepository.downloadDir,
+                settingsRepository.downloadDirUri,
+                settingsRepository.useDirPicker,
+                settingsRepository.maxConcurrentTasks,
+                settingsRepository.maxConcurrentSegments
+            ) { dir, uri, usePicker, maxTasks, maxSegments ->
+                arrayOf(dir, uri, usePicker, maxTasks, maxSegments)
+            }.combine(
+                combine(
+                    settingsRepository.darkMode,
+                    settingsRepository.transcodeMode,
+                    settingsRepository.silentMode
+                ) { dark, transcode, silent ->
+                    arrayOf(dark, transcode, silent)
                 }
-            }
-            launch {
-                settingsRepository.downloadDirUri.collect { uri ->
-                    _state.update { it.copy(downloadDirUri = uri) }
-                }
-            }
-            launch {
-                settingsRepository.useDirPicker.collect { value ->
-                    _state.update { it.copy(useDirPicker = value) }
-                }
-            }
-            launch {
-                settingsRepository.maxConcurrentTasks.collect { value ->
-                    _state.update { it.copy(maxConcurrentTasks = value) }
-                }
-            }
-            launch {
-                settingsRepository.maxConcurrentSegments.collect { value ->
-                    _state.update { it.copy(maxConcurrentSegments = value) }
-                }
-            }
-            launch {
-                settingsRepository.darkMode.collect { value ->
-                    _state.update { it.copy(darkMode = value) }
-                }
-            }
-            launch {
-                settingsRepository.transcodeMode.collect { value ->
-                    _state.update { it.copy(transcodeMode = value) }
-                }
-            }
-            launch {
-                settingsRepository.silentMode.collect { value ->
-                    _state.update { it.copy(silentMode = value) }
-                }
+            ) { first, second ->
+                SettingsState(
+                    downloadDir = first[0] as String,
+                    downloadDirUri = first[1] as String?,
+                    useDirPicker = first[2] as Boolean,
+                    maxConcurrentTasks = first[3] as Int,
+                    maxConcurrentSegments = first[4] as Int,
+                    darkMode = second[0] as Int,
+                    transcodeMode = second[1] as Int,
+                    silentMode = second[2] as Boolean
+                )
+            }.collect { newState ->
+                _state.update { it.copy(
+                    downloadDir = newState.downloadDir,
+                    downloadDirUri = newState.downloadDirUri,
+                    useDirPicker = newState.useDirPicker,
+                    maxConcurrentTasks = newState.maxConcurrentTasks,
+                    maxConcurrentSegments = newState.maxConcurrentSegments,
+                    darkMode = newState.darkMode,
+                    transcodeMode = newState.transcodeMode,
+                    silentMode = newState.silentMode
+                ) }
             }
         }
     }

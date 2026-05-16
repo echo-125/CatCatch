@@ -6,14 +6,11 @@ import androidx.datastore.preferences.core.edit
 import com.catcatch.data.local.AppPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * 配置持久化仓库
  */
-@Singleton
-class SettingsRepository @Inject constructor(
+class SettingsRepository(
     private val dataStore: DataStore<Preferences>
 ) {
     val downloadDir: Flow<String> = dataStore.data.map {
