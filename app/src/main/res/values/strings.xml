@@ -8,4 +8,8 @@
     <string name="notification_download_failed">下载失败</string>
     <string name="notification_permission_title">需要通知权限</string>
     <string name="notification_permission_message">请授予通知权限以显示下载进度</string>
+    <string name="shortcut_add_short">添加下载</string>
+    <string name="shortcut_add_long">添加新的下载任务</string>
+    <string name="shortcut_downloads_short">下载管理</string>
+    <string name="shortcut_downloads_long">查看下载列表</string>
 </resources>

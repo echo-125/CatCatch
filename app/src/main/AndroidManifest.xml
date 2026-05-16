@@ -34,17 +34,25 @@
             android:exported="true"
             android:configChanges="smallestScreenSize|screenLayout|density"
             android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.CatCatch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Deep Link: catcatch://add?url=...&title=...&headers=...&referer=... -->
+            <!-- Deep Link: catcatch://add?url=...&title=...&headers=... -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="catcatch" android:host="add" />
+            </intent-filter>
+            <!-- 导航 Deep Link: catcatch://navigate/downloads 等 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="catcatch" android:host="navigate" />
             </intent-filter>
             <!-- 浏览器分享链接 -->
             <intent-filter>

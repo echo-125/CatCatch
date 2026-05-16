@@ -3,9 +3,14 @@ package com.catcatch
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Intent
 import android.os.Build
 import android.util.Log
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.catcatch.data.repository.DownloadRepository
+import com.catcatch.ui.MainActivity
 import com.catcatch.util.CacheManager
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -46,6 +51,7 @@ class CatCatchApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        setupShortcuts()
 
         // 启动时自动清理缓存和重置卡住的任务
         appScope.launch {
@@ -81,5 +87,36 @@ class CatCatchApp : Application() {
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
         }
+    }
+
+    /**
+     * 设置桌面长按快捷方式
+     */
+    private fun setupShortcuts() {
+        val addShortcut = ShortcutInfoCompat.Builder(this, "add_download")
+            .setShortLabel(getString(R.string.shortcut_add_short))
+            .setLongLabel(getString(R.string.shortcut_add_long))
+            .setIcon(IconCompat.createWithResource(this, R.drawable.ic_shortcut_add))
+            .setIntent(
+                Intent(this, MainActivity::class.java).apply {
+                    action = Intent.ACTION_VIEW
+                    data = android.net.Uri.parse("catcatch://add")
+                }
+            )
+            .build()
+
+        val downloadsShortcut = ShortcutInfoCompat.Builder(this, "downloads")
+            .setShortLabel(getString(R.string.shortcut_downloads_short))
+            .setLongLabel(getString(R.string.shortcut_downloads_long))
+            .setIcon(IconCompat.createWithResource(this, R.drawable.ic_shortcut_download))
+            .setIntent(
+                Intent(this, MainActivity::class.java).apply {
+                    action = Intent.ACTION_VIEW
+                    data = android.net.Uri.parse("catcatch://navigate/downloads")
+                }
+            )
+            .build()
+
+        ShortcutManagerCompat.setDynamicShortcuts(this, listOf(addShortcut, downloadsShortcut))
     }
 }

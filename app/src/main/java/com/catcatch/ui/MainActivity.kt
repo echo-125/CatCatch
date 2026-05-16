@@ -30,6 +30,17 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        const val EXTRA_NAVIGATE_ROUTE = "navigate_route"
+
+        /** Deep Link 允许传入的 HTTP 请求头白名单 */
+        private val ALLOWED_HEADERS = setOf(
+            "referer", "origin", "user-agent",
+            "accept", "accept-language", "accept-encoding",
+            "connection"
+        )
+    }
+
     @Inject
     lateinit var settingsRepository: SettingsRepository
 
@@ -91,15 +102,23 @@ class MainActivity : ComponentActivity() {
 
         when (uri.scheme) {
             "catcatch" -> {
-                if (uri.host != "add") return
-                val url = uri.getQueryParameter("url") ?: return
-                if (!url.startsWith("http://") && !url.startsWith("https://")) return
-                val title = uri.getQueryParameter("title") ?: ""
-                val headersParam = uri.getQueryParameter("headers") ?: ""
-                val headers = parseHeadersJson(headersParam)
-                val silent = uri.getQueryParameter("silent") == "true"
-                val app = application as CatCatchApp
-                app.pendingDeepLink = DeepLinkData(url, title, headers, silent)
+                when (uri.host) {
+                    "add" -> {
+                        val url = uri.getQueryParameter("url") ?: return
+                        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+                        val title = uri.getQueryParameter("title") ?: ""
+                        val headersParam = uri.getQueryParameter("headers") ?: ""
+                        val headers = parseHeadersJson(headersParam)
+                        val silent = uri.getQueryParameter("silent") == "true"
+                        val app = application as CatCatchApp
+                        app.pendingDeepLink = DeepLinkData(url, title, headers, silent)
+                    }
+                    "navigate" -> {
+                        // 桌面快捷方式导航：catcatch://navigate/downloads 等
+                        val route = uri.pathSegments.firstOrNull() ?: return
+                        intent.putExtra(EXTRA_NAVIGATE_ROUTE, route)
+                    }
+                }
             }
             "http", "https" -> {
                 val url = uri.toString()
@@ -150,14 +169,5 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             emptyMap()
         }
-    }
-
-    companion object {
-        /** Deep Link 允许传入的 HTTP 请求头白名单 */
-        private val ALLOWED_HEADERS = setOf(
-            "referer", "origin", "user-agent",
-            "accept", "accept-language", "accept-encoding",
-            "connection"
-        )
     }
 }

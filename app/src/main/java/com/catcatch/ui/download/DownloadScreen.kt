@@ -181,9 +181,9 @@ fun DownloadScreen(
             }
         }
 
-        // 底部批量操作栏
+        // 底部批量操作栏（多选模式下始终显示，未选中时提示用户选择）
         AnimatedVisibility(
-            visible = isSelectionMode && selectedIds.isNotEmpty(),
+            visible = isSelectionMode,
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it })
         ) {
@@ -212,9 +212,10 @@ private fun BatchActionBar(
     onBatchDelete: () -> Unit
 ) {
     // 判断是否所有选中任务都是可重试状态
-    val canRetry = selectedTasks.all {
+    val canRetry = selectedTasks.isNotEmpty() && selectedTasks.all {
         it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PENDING)
     }
+    val hasSelection = selectedTasks.isNotEmpty()
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -228,7 +229,7 @@ private fun BatchActionBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "已选 ${selectedTasks.size} 项",
+                text = if (hasSelection) "已选 ${selectedTasks.size} 项" else "请选择任务",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
@@ -247,7 +248,10 @@ private fun BatchActionBar(
                 }
             }
 
-            TextButton(onClick = onBatchDelete) {
+            TextButton(
+                onClick = onBatchDelete,
+                enabled = hasSelection
+            ) {
                 Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = null,
