@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.catcatch.data.repository.DownloadRepository
 import com.catcatch.data.repository.SettingsRepository
@@ -42,6 +43,7 @@ import javax.inject.Inject
 class DownloadService : Service() {
 
     companion object {
+        private const val TAG = "DownloadService"
         const val EXTRA_TASK_ID = "task_id"
         const val EXTRA_ACTION = "action"
         const val ACTION_CANCEL = "cancel"
@@ -173,10 +175,10 @@ class DownloadService : Service() {
      * 下载任务：解析 → 下载分片 → 合并 → 释放槽位 → 后台转码
      */
     private suspend fun downloadTask(taskId: Long) {
+        val taskTag = "DownloadService"
         try {
             val task = repository.getTaskById(taskId) ?: return
-
-            android.util.Log.d("DownloadService", "开始下载任务: $taskId, 输出目录: ${task.outputDir}, 输出文件名: ${task.outputName}")
+            Log.i(taskTag, "[$taskId] 开始下载任务: ${task.outputName}")
 
             // 清除旧的视频元信息，避免重试时残留
             repository.updateTaskStatus(
@@ -197,6 +199,7 @@ class DownloadService : Service() {
 
             val m3u8Data = m3u8Result.getOrNull()!!
             val segments = m3u8Data.segments
+            Log.i(taskTag, "[$taskId] M3U8 解析完成: ${segments.size} 个分片, 总时长=${m3u8Data.totalDuration}s, 加密=${segments.any { it.isEncrypted }}")
 
             repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING, total = segments.size, duration = m3u8Data.totalDuration)
 
@@ -219,6 +222,12 @@ class DownloadService : Service() {
                 dir
             }
 
+            // 检查断点续传：统计已存在的分片数
+            val existingSegments = segments.indices.count { segmentFile(downloadDir, it).exists() && segmentFile(downloadDir, it).length() > 0 }
+            if (existingSegments > 0) {
+                Log.i(taskTag, "[$taskId] 断点续传: $existingSegments/${segments.size} 个分片已存在")
+            }
+
             // 并发下载分片
             val maxConcurrentSegments = settingsRepository.maxConcurrentSegments.first()
             val semaphore = Semaphore(maxConcurrentSegments)
@@ -226,8 +235,10 @@ class DownloadService : Service() {
             var lastUpdateTime = 0L
             var fileSizeEstimated = 0L
             val headers = task.headers
+            var lastLogPercent = -1
 
-            android.util.Log.d("DownloadService", "开始下载分片，并发数: $maxConcurrentSegments")
+            Log.i(taskTag, "[$taskId] 开始并发下载, 并发数=$maxConcurrentSegments")
+            val downloadStartTime = System.currentTimeMillis()
             coroutineScope {
                 segments.mapIndexed { ordinal, segment ->
                     async {
@@ -236,6 +247,13 @@ class DownloadService : Service() {
                             val result = segmentDownloader.downloadWithRetry(segment, segmentFile, headers)
                             if (result.isSuccess) {
                                 val count = completedCount.incrementAndGet()
+                                // 每 10% 输出一次里程碑日志
+                                val percent = (count * 100 / segments.size)
+                                if (percent / 10 > lastLogPercent / 10) {
+                                    lastLogPercent = percent
+                                    val elapsed = (System.currentTimeMillis() - downloadStartTime) / 1000
+                                    Log.i(taskTag, "[$taskId] 下载进度: $count/${segments.size} ($percent%), 已用时=${elapsed}s")
+                                }
                                 val now = System.currentTimeMillis()
                                 if (now - lastUpdateTime > 500) {
                                     lastUpdateTime = now
@@ -267,6 +285,7 @@ class DownloadService : Service() {
                     }
                 }.awaitAll()
             }
+            Log.i(taskTag, "[$taskId] 首轮下载完成: ${completedCount.get()}/${segments.size}, 耗时=${(System.currentTimeMillis() - downloadStartTime) / 1000}s")
 
             // 批量重试失败分片
             var failedSegments = segments.withIndex().filter { (ordinal, _) ->
@@ -275,19 +294,24 @@ class DownloadService : Service() {
             }
 
             if (failedSegments.isNotEmpty()) {
+                Log.w(taskTag, "[$taskId] ${failedSegments.size} 个分片需要重试: ${failedSegments.map { it.index }}")
                 repeat(3) { round ->
                     if (failedSegments.isEmpty()) return@repeat
-                    delay(2000L * (round + 1))
+                    val waitMs = 2000L * (round + 1)
+                    Log.i(taskTag, "[$taskId] 批量重试第 ${round + 1}/3 轮, 等待 ${waitMs}ms...")
+                    delay(waitMs)
                     val remaining = mutableListOf<IndexedValue<Segment>>()
                     for ((ordinal, segment) in failedSegments) {
                         val file = segmentFile(downloadDir, ordinal)
                         val result = segmentDownloader.downloadWithRetry(segment, file, headers)
                         if (result.isSuccess) completedCount.incrementAndGet() else remaining.add(IndexedValue(ordinal, segment))
                     }
+                    Log.i(taskTag, "[$taskId] 重试第 ${round + 1} 轮完成: 成功=${failedSegments.size - remaining.size}, 仍失败=${remaining.size}")
                     failedSegments = remaining
                 }
 
                 if (failedSegments.isNotEmpty()) {
+                    Log.e(taskTag, "[$taskId] ${failedSegments.size} 个分片最终失败，任务中止")
                     repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "${failedSegments.size} 个分片下载失败")
                     showNotification(task.outputName, "下载失败")
                     return
@@ -296,10 +320,12 @@ class DownloadService : Service() {
 
             val downloaded = completedCount.get()
             repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING, progress = 1f, downloaded = downloaded)
+            Log.i(taskTag, "[$taskId] 全部分片下载完成: $downloaded/${segments.size}")
 
             // 合并分片
             repository.updateTaskStatus(taskId, TaskStatus.MERGING)
             showNotification(task.outputName, "合并中...")
+            val mergeStart = System.currentTimeMillis()
 
             val mergedFile = File(downloadDir, "${task.outputName}.ts")
             mergeSegments(downloadDir, segments.size, mergedFile)
@@ -308,6 +334,7 @@ class DownloadService : Service() {
             for (i in 0 until segments.size) {
                 segmentFile(downloadDir, i).delete()
             }
+            Log.i(taskTag, "[$taskId] 合并完成: ${mergedFile.length()} bytes, 耗时=${System.currentTimeMillis() - mergeStart}ms")
 
             // 合并完成，提取视频信息
             val mergedSize = mergedFile.length()
@@ -389,7 +416,7 @@ class DownloadService : Service() {
                 NotificationUtil.showDownloadComplete(this, outputName, savedPath)
             } else {
                 val error = convertResult.exceptionOrNull()?.message ?: "转码未知错误"
-                android.util.Log.e("DownloadService", "转码失败: $error")
+                Log.e(TAG, "[$taskId] 转码失败: $error")
                 // 转码失败，保留 TS 文件，复制到 SAF
                 if (useSaf) {
                     val savedPath = copyAndCleanup(mergedFile, outputName, safUriString!!, downloadDir)
@@ -407,7 +434,7 @@ class DownloadService : Service() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            android.util.Log.e("DownloadService", "转码异常", e)
+            Log.e(TAG, "[$taskId] 转码异常", e)
             repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = "转码异常: ${e.message}")
         }
     }

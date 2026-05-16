@@ -40,9 +40,13 @@ class SegmentDownloader(private val client: OkHttpClient) {
         runCatching {
             // 快速路径：非空文件直接视为已完成（避免对每个已完成分片发 HTTP 请求导致 CDN 限流）
             if (outputFile.exists() && outputFile.length() > 0) {
+                Log.d(TAG, "分片 #${segment.index} 已存在，跳过 (${outputFile.length()} bytes)")
                 onProgress(outputFile.length(), outputFile.length())
                 return@runCatching
             }
+
+            Log.d(TAG, "分片 #${segment.index} 开始下载: ${segment.url.takeLast(80)}")
+            val startTime = System.currentTimeMillis()
 
             val requestBuilder = Request.Builder().url(segment.url)
             headers.forEach { (key, value) -> requestBuilder.addHeader(key, value) }
@@ -82,6 +86,9 @@ class SegmentDownloader(private val client: OkHttpClient) {
                     outputFile.delete()
                     throw Exception("分片大小不匹配: 期望 $expectedSize, 实际 ${outputFile.length()}")
                 }
+
+                val elapsed = System.currentTimeMillis() - startTime
+                Log.d(TAG, "分片 #${segment.index} 下载完成: ${outputFile.length()} bytes, 耗时=${elapsed}ms")
             } finally {
                 response.close()
             }
@@ -165,11 +172,15 @@ class SegmentDownloader(private val client: OkHttpClient) {
             val result = download(segment, outputFile, headers, onProgress)
             if (result.isSuccess) return Result.success(Unit)
             lastException = result.exceptionOrNull() as? Exception
+            Log.w(TAG, "分片 #${segment.index} 第 ${attempt + 1} 次失败: ${lastException?.message}")
             if (outputFile.exists()) outputFile.delete()
             if (attempt < maxRetries - 1) {
-                delay(1000L * (1 shl attempt))
+                val delayMs = 1000L * (1 shl attempt)
+                Log.d(TAG, "分片 #${segment.index} ${delayMs}ms 后重试...")
+                delay(delayMs)
             }
         }
+        Log.e(TAG, "分片 #${segment.index} 全部 $maxRetries 次重试失败: ${lastException?.message}")
         return Result.failure(lastException ?: Exception("下载失败"))
     }
 }
