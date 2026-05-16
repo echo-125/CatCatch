@@ -38,6 +38,12 @@ class SegmentDownloader(private val client: OkHttpClient) {
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            // 快速路径：非空文件直接视为已完成（避免对每个已完成分片发 HTTP 请求导致 CDN 限流）
+            if (outputFile.exists() && outputFile.length() > 0) {
+                onProgress(outputFile.length(), outputFile.length())
+                return@runCatching
+            }
+
             val requestBuilder = Request.Builder().url(segment.url)
             headers.forEach { (key, value) -> requestBuilder.addHeader(key, value) }
             val request = requestBuilder.build()
@@ -50,16 +56,6 @@ class SegmentDownloader(private val client: OkHttpClient) {
 
                 val body = response.body ?: throw Exception("响应内容为空")
                 val contentLength = body.contentLength()
-
-                // 断点续传：文件已存在且大小匹配时跳过
-                if (outputFile.exists() && outputFile.length() > 0) {
-                    if (contentLength <= 0 || outputFile.length() == contentLength) {
-                        onProgress(outputFile.length(), outputFile.length())
-                        return@runCatching
-                    }
-                    // 大小不匹配，删除不完整文件重新下载
-                    outputFile.delete()
-                }
 
                 if (segment.isEncrypted && segment.keyUri != null) {
                     downloadAndDecryptStream(segment, body.byteStream(), outputFile, onProgress, contentLength, headers)
@@ -78,6 +74,13 @@ class SegmentDownloader(private val client: OkHttpClient) {
                             }
                         }
                     }
+                }
+
+                // 下载完成后验证：如果服务端报告了大小但不匹配，删除文件以便重试
+                val expectedSize = response.body?.contentLength() ?: -1
+                if (expectedSize > 0 && outputFile.length() != expectedSize) {
+                    outputFile.delete()
+                    throw Exception("分片大小不匹配: 期望 $expectedSize, 实际 ${outputFile.length()}")
                 }
             } finally {
                 response.close()
