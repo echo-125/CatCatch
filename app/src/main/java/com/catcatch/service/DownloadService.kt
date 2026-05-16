@@ -526,7 +526,8 @@ class DownloadService : Service() {
     )
 
     /**
-     * 重试一批失败分片，返回剩余失败列表和是否有 401 错误
+     * 重试一批失败分片（单次尝试），检测到 401 时立即停止
+     * 返回剩余失败列表和是否有 401 错误
      */
     private suspend fun retryFailedSegments(
         failed: List<IndexedValue<Segment>>,
@@ -538,9 +539,15 @@ class DownloadService : Service() {
         var has401 = false
         val remaining = mutableListOf<IndexedValue<Segment>>()
         for ((ordinal, _) in failed) {
+            // 已经检测到 401，剩余分片不再尝试（同样的过期 token 必然失败）
+            if (has401) {
+                remaining.add(IndexedValue(ordinal, segments[ordinal]))
+                continue
+            }
             val segment = segments[ordinal]
             val file = segmentFile(downloadDir, ordinal)
-            val result = segmentDownloader.downloadWithRetry(segment, file, headers)
+            // 批量重试阶段用单次下载（首轮已用 downloadWithRetry 重试过了）
+            val result = segmentDownloader.download(segment, file, headers)
             if (result.isSuccess) {
                 completedCount.incrementAndGet()
             } else {
@@ -548,6 +555,7 @@ class DownloadService : Service() {
                 val ex = result.exceptionOrNull()
                 if (ex is DownloadException && ex.httpCode == 401) {
                     has401 = true
+                    Log.w(TAG, "[$ordinal] 检测到 401，跳过剩余 ${failed.size - failed.indexOfFirst { it.index == ordinal } - 1} 个分片")
                 }
             }
         }
