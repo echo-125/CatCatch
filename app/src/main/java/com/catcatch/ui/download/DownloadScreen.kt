@@ -185,7 +185,6 @@ fun DownloadScreen(
         // 底部批量操作栏（多选模式下始终显示，未选中时提示用户选择）
         AnimatedVisibility(
             visible = isSelectionMode,
-            modifier = Modifier.navigationBarsPadding(),
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it })
         ) {
