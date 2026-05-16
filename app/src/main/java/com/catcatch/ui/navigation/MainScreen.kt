@@ -3,19 +3,16 @@ package com.catcatch.ui.navigation
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.catcatch.domain.model.TaskStatus
-import com.catcatch.ui.MainActivity
 import com.catcatch.ui.download.DownloadScreen
 import com.catcatch.ui.home.HomeScreen
 import com.catcatch.ui.home.HomeViewModel
@@ -31,19 +28,6 @@ fun MainScreen(
 ) {
     val navController = rememberNavController()
     val tabs = listOf(Screen.Home, Screen.Downloads, Screen.Settings)
-
-    // 处理桌面快捷方式导航
-    val activity = LocalContext.current as? android.app.Activity
-    LaunchedEffect(Unit) {
-        val route = activity?.intent?.getStringExtra(MainActivity.EXTRA_NAVIGATE_ROUTE)
-        if (!route.isNullOrEmpty()) {
-            navController.navigate(route) {
-                launchSingleTop = true
-            }
-            // 消费掉，避免旋转屏幕后重复导航
-            activity.intent.removeExtra(MainActivity.EXTRA_NAVIGATE_ROUTE)
-        }
-    }
 
     // 共享 ViewModel，避免重复创建导致 Deep Link 数据被多次处理
     val sharedViewModel: HomeViewModel = hiltViewModel()

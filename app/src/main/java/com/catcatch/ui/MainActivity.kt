@@ -31,8 +31,6 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     companion object {
-        const val EXTRA_NAVIGATE_ROUTE = "navigate_route"
-
         /** Deep Link 允许传入的 HTTP 请求头白名单 */
         private val ALLOWED_HEADERS = setOf(
             "referer", "origin", "user-agent",
@@ -112,11 +110,6 @@ class MainActivity : ComponentActivity() {
                         val silent = uri.getQueryParameter("silent") == "true"
                         val app = application as CatCatchApp
                         app.pendingDeepLink = DeepLinkData(url, title, headers, silent)
-                    }
-                    "navigate" -> {
-                        // 桌面快捷方式导航：catcatch://navigate/downloads 等
-                        val route = uri.pathSegments.firstOrNull() ?: return
-                        intent.putExtra(EXTRA_NAVIGATE_ROUTE, route)
                     }
                 }
             }
