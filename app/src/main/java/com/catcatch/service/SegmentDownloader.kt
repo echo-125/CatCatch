@@ -88,11 +88,17 @@ class SegmentDownloader(private val client: OkHttpClient) {
                     }
                 }
 
-                // 下载完成后验证：如果服务端报告了大小但不匹配，删除文件以便重试
-                val expectedSize = response.body?.contentLength() ?: -1
-                if (expectedSize > 0 && outputFile.length() != expectedSize) {
+                // 下载完成后验证：仅对非加密分片比较大小（加密分片解密后大小不同于原始加密大小）
+                if (!segment.isEncrypted) {
+                    val expectedSize = contentLength
+                    if (expectedSize > 0 && outputFile.length() != expectedSize) {
+                        outputFile.delete()
+                        throw Exception("分片大小不匹配: 期望 $expectedSize, 实际 ${outputFile.length()}")
+                    }
+                } else if (outputFile.length() == 0L) {
+                    // 加密分片解密后不应为空
                     outputFile.delete()
-                    throw Exception("分片大小不匹配: 期望 $expectedSize, 实际 ${outputFile.length()}")
+                    throw Exception("加密分片解密后文件为空")
                 }
 
                 val elapsed = System.currentTimeMillis() - startTime
