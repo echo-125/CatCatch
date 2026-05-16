@@ -296,6 +296,7 @@ class DownloadService : Service() {
             if (failedSegments.isNotEmpty()) {
                 Log.w(taskTag, "[$taskId] ${failedSegments.size} 个分片需要重试: ${failedSegments.map { it.index }}")
                 var currentSegments = segments
+                var authRefreshAttempted = false
 
                 repeat(3) { round ->
                     if (failedSegments.isEmpty()) return@repeat
@@ -305,14 +306,31 @@ class DownloadService : Service() {
 
                     val result = retryFailedSegments(failedSegments, currentSegments, downloadDir, headers, completedCount)
 
+                    // 全部成功
+                    if (result.remaining.isEmpty()) {
+                        failedSegments = emptyList()
+                        return@repeat
+                    }
+
                     // 检查是否有 401 鉴权失败
-                    if (result.has401) {
+                    if (result.has401 && !authRefreshAttempted) {
+                        authRefreshAttempted = true
                         Log.i(taskTag, "[$taskId] 检测到 401 鉴权过期，尝试刷新 M3U8 播放列表...")
                         val refreshed = refreshSegmentsFromM3U8(task.url, task.headers)
                         if (refreshed != null && refreshed.size == segments.size) {
+                            // 检查新 URL 是否真的变了（对比第一个失败分片的 URL）
+                            val firstFailedOrdinal = result.remaining.first().index
+                            val oldUrl = currentSegments[firstFailedOrdinal].url
+                            val newUrl = refreshed[firstFailedOrdinal].url
+                            if (oldUrl == newUrl) {
+                                // URL 没变（M3U8 被 CDN 缓存），继续重试也没用
+                                Log.e(taskTag, "[$taskId] M3U8 刷新后 URL 未变化（可能被 CDN 缓存），停止重试")
+                                failedSegments = result.remaining
+                                return@repeat
+                            }
+                            // URL 变了，用新 URL 重试
                             currentSegments = refreshed
-                            Log.i(taskTag, "[$taskId] M3U8 刷新成功，使用新 URL 重试...")
-                            // 用新 URL 立即重试一次
+                            Log.i(taskTag, "[$taskId] 获取到新 URL，使用新鉴权重试...")
                             val retryResult = retryFailedSegments(result.remaining, currentSegments, downloadDir, headers, completedCount)
                             if (retryResult.remaining.isEmpty()) {
                                 failedSegments = emptyList()
@@ -331,11 +349,20 @@ class DownloadService : Service() {
                 }
 
                 if (failedSegments.isNotEmpty()) {
-                    val sampleErrors = failedSegments.take(3).joinToString { "#${it.index}" }
-                    val errorMsg = "${failedSegments.size} 个分片下载失败 (例: $sampleErrors)"
+                    val sampleIndices = failedSegments.take(3).joinToString { "#${it.index}" }
+                    // 判断主要失败原因
+                    val has401 = failedSegments.any { (_, seg) ->
+                        // 通过检查 URL 中的 exp 参数判断是否为过期 token
+                        seg.url.contains("exp=")
+                    }
+                    val errorMsg = if (has401) {
+                        "鉴权过期: ${failedSegments.size} 个分片的访问链接已失效 ($sampleIndices 等)"
+                    } else {
+                        "${failedSegments.size} 个分片下载失败 ($sampleIndices 等)"
+                    }
                     Log.e(taskTag, "[$taskId] $errorMsg，任务中止")
                     repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = errorMsg)
-                    showNotification(task.outputName, "下载失败: ${failedSegments.size} 个分片无法下载")
+                    showNotification(task.outputName, if (has401) "下载失败: 链接已过期" else "下载失败")
                     return
                 }
             }
