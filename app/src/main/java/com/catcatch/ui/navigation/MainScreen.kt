@@ -13,6 +13,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.catcatch.domain.model.TaskStatus
+import com.catcatch.ui.browser.BrowserScreen
 import com.catcatch.ui.download.DownloadScreen
 import com.catcatch.ui.home.HomeScreen
 import com.catcatch.ui.home.HomeViewModel
@@ -27,7 +28,7 @@ fun MainScreen(
     windowSizeClass: WindowSizeClass
 ) {
     val navController = rememberNavController()
-    val tabs = listOf(Screen.Home, Screen.Downloads, Screen.Settings)
+    val tabs = listOf(Screen.Home, Screen.Browser, Screen.Downloads, Screen.Settings)
 
     // 共享 ViewModel，避免重复创建导致 Deep Link 数据被多次处理
     val sharedViewModel: HomeViewModel = hiltViewModel()
@@ -53,6 +54,7 @@ fun MainScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             composable(Screen.Home.route) { HomeScreen(viewModel = sharedViewModel) }
+            composable(Screen.Browser.route) { BrowserScreen() }
             composable(Screen.Downloads.route) { DownloadScreen(viewModel = sharedViewModel) }
             composable(Screen.Settings.route) { SettingsScreen() }
         }
