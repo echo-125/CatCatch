@@ -592,3 +592,169 @@ App 根据屏幕方向和宽度自动切换导航方式。
 - 内容区使用 `imePadding` 自动适配软键盘
 
 ---
+
+---
+
+## 内置浏览器
+
+### 功能概述
+
+内置浏览器支持在 APP 内直接浏览网页并嗅探 M3U8 链接，无需跳转外部浏览器。
+
+### UI 布局
+
+```
+┌──────────────────────────────────────┐
+│ [N] 🏠 ☆ [    URL 输入框    ✈/⟳] ← → │  ← 地址栏
+├──────────────────────────────────────┤
+│                                      │
+│  新标签页：欢迎界面                  │
+│  浏览模式：WebView                   │
+│                               [📥]  │  ← 悬浮嗅探按钮
+├──────────────────────────────────────┤
+│       主页  窗口  下载  设置         │  ← APP 底部 tab 栏
+└──────────────────────────────────────┘
+```
+
+### 核心功能
+
+1. **多标签页管理**
+   - 新建、关闭、切换标签页
+   - 标签管理器（侧边栏覆盖，动画效果）
+   - 标签计数显示
+
+2. **三个状态模式**
+   - `NEW_TAB`：新标签页（欢迎界面）
+   - `BROWSING`：网页浏览（WebView + 地址栏）
+   - `TAB_MANAGER`：标签管理器（侧边栏覆盖）
+
+3. **地址栏设计**
+   - `[N]` 标签管理按钮（带黑色边框）
+   - `🏠` 主页按钮
+   - `☆` 收藏按钮（五角星，点击后为黑色）
+   - `[URL 输入框 + ✈/⟳]` 输入框 + 发送/刷新按钮
+   - `← →` 后退/前进按钮
+
+4. **M3U8 嗅探**
+   - 两层嗅探引擎：
+     - Kotlin 层：`shouldInterceptRequest()` 拦截原生网络请求
+     - JS 层：注入 `sniffer.js` 拦截 XHR/fetch、DOM 监听
+   - 深度扫描：扫描 HTML、script 标签、video 元素、window 对象
+   - 嗅探结果面板：显示链接列表，一键添加下载任务
+
+5. **广告拦截**
+   - URL 关键词过滤（ad、ads、adv、advertisement 等）
+   - `shouldOverrideUrlLoading()` 拦截广告 URL
+
+6. **其他功能**
+   - 收藏功能（五角星按钮，点击后为黑色）
+   - 后退/前进导航（连接 WebView）
+   - 页面标题自动获取（用于文件名）
+   - 加载进度条和遮罩
+
+---
+
+## 开发计划
+
+### 最高优先级 🔴
+
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| 嗅探功能完善 | 支持更多网站、HLS.js 动态加载、DASH manifest | ❌ 待开发 |
+| 新标签页快捷方式 | 收藏网址以图标显示，使用网站 logo | ❌ 待开发 |
+| 浏览器书签管理 | 添加/删除/编辑/文件夹分类/搜索 | ❌ 待开发 |
+| 嗅探结果面板 | 详细列表、多分辨率选择、嗅探模式切换 | ❌ 待开发 |
+| 设置页面浏览器配置 | 嗅探模式、广告拦截、隐私设置、网站权限 | ❌ 待开发 |
+| 浏览器多窗口模式 | 分屏、画中画 | ❌ 待开发 |
+
+### 中优先级
+
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| 仅 WiFi 下载选项 | 设置页面添加开关 | ❌ 待开发 |
+| 浏览器最近访问记录 | 显示最近访问的网站 | ❌ 待开发 |
+| 浏览器历史记录 | 完整的浏览历史 | ❌ 待开发 |
+
+### 低优先级
+
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| WorkManager 替代 Foreground Service | 更好的系统集成 | ❌ 待开发 |
+| 任务排序和筛选 | 下载列表排序和筛选 | ❌ 待开发 |
+| 下载历史搜索 | 搜索下载历史 | ❌ 待开发 |
+| 导出/导入任务列表 | 备份和恢复任务 | ❌ 待开发 |
+| 浏览器手势操作 | 左滑返回、右滑前进、下拉刷新 | ❌ 待开发 |
+
+---
+
+## 技术实现
+
+### 状态管理
+
+```kotlin
+data class BrowserState(
+    val tabs: List<Tab> = listOf(Tab()),
+    val activeTabId: String = tabs.firstOrNull()?.id ?: "",
+    val mode: BrowserMode = BrowserMode.NEW_TAB,
+    val isTabManagerOpen: Boolean = false,
+    val sniffedLinks: List<SniffedLink> = emptyList(),
+    val siteConfig: SiteConfig? = null,
+    val logs: List<String> = emptyList(),
+    val success: String? = null,
+    val error: String? = null
+)
+
+data class Tab(
+    val id: String = UUID.randomUUID().toString(),
+    val url: String = "",
+    val title: String = "新标签页",
+    val isLoading: Boolean = false,
+    val canGoBack: Boolean = false,
+    val canGoForward: Boolean = false,
+    val isFavorite: Boolean = false
+)
+```
+
+### JS Bridge 通信
+
+```kotlin
+class SnifferBridge(
+    private val onM3u8Found: (url: String, headers: Map<String, String>) -> Unit,
+    private val onLog: (message: String) -> Unit,
+    private val onTitle: (title: String) -> Unit
+) {
+    @JavascriptInterface
+    fun onM3u8Found(url: String, headersJson: String) { ... }
+
+    @JavascriptInterface
+    fun onLog(message: String) { ... }
+
+    @JavascriptInterface
+    fun onTitle(title: String) { ... }
+}
+```
+
+### 嗅探脚本 (sniffer.js)
+
+- 拦截 XMLHttpRequest.open/send
+- 拦截 window.fetch
+- MutationObserver 监听 <video> 元素
+- 深度扫描 HTML、script、video、window
+- 通过 `window.Android.onM3u8Found()` 通知 Kotlin 层
+
+### 文件结构
+
+```
+ui/browser/
+├── BrowserScreen.kt              # 浏览器主页面
+├── BrowserViewModel.kt           # 状态管理
+├── SnifferBridge.kt              # JS Bridge
+├── config/
+│   └── SiteConfigs.kt            # 网站配置
+└── model/
+    ├── BrowserModels.kt          # 嗅探数据模型
+    └── Tab.kt                    # 标签页模型
+
+assets/
+└── sniffer.js                    # 嗅探脚本
+```
