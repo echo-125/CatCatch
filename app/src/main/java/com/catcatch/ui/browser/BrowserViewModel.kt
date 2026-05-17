@@ -35,6 +35,16 @@ enum class BrowserMode {
 }
 
 /**
+ * 嗅探模式
+ */
+enum class SniffMode(val label: String) {
+    AUTO("自动"),
+    NETWORK("网络拦截"),
+    DOM("DOM 监听"),
+    DEEP_SCAN("深度扫描")
+}
+
+/**
  * 浏览器状态
  */
 data class BrowserState(
@@ -42,6 +52,8 @@ data class BrowserState(
     val activeTabId: String = tabs.firstOrNull()?.id ?: "",
     val mode: BrowserMode = BrowserMode.NEW_TAB,
     val isTabManagerOpen: Boolean = false,
+    val isSnifferPanelOpen: Boolean = false,
+    val sniffMode: SniffMode = SniffMode.AUTO,
     val sniffedLinks: List<SniffedLink> = emptyList(),
     val siteConfig: SiteConfig? = null,
     val logs: List<String> = emptyList(),
@@ -429,7 +441,7 @@ class BrowserViewModel @Inject constructor(
                 val fileName = getUniqueFileName(link.fileName.ifEmpty { generateFileName(link.url) }, currentDownloadDir)
 
                 val taskId = repository.addTask(
-                    url = link.url,
+                    url = link.selectedUrl,
                     outputName = fileName,
                     outputDir = currentDownloadDir,
                     headers = link.headers
@@ -480,6 +492,70 @@ class BrowserViewModel @Inject constructor(
     }
 
     // ==================== UI 状态 ====================
+
+    /**
+     * 切换嗅探面板展开/收起
+     */
+    fun toggleSnifferPanel() {
+        _state.update { it.copy(isSnifferPanelOpen = !it.isSnifferPanelOpen) }
+    }
+
+    fun closeSnifferPanel() {
+        _state.update { it.copy(isSnifferPanelOpen = false) }
+    }
+
+    /**
+     * 设置嗅探模式
+     */
+    fun setSniffMode(mode: SniffMode) {
+        _state.update { it.copy(sniffMode = mode) }
+    }
+
+    /**
+     * 选择指定链接的变体（分辨率）
+     */
+    fun selectVariant(linkUrl: String, variantIndex: Int) {
+        _state.update { state ->
+            val updatedLinks = state.sniffedLinks.map { link ->
+                if (link.url == linkUrl) link.copy(selectedVariantIndex = variantIndex) else link
+            }
+            state.copy(sniffedLinks = updatedLinks)
+        }
+    }
+
+    /**
+     * 批量添加所有嗅探到的链接
+     */
+    fun addAllTasks() {
+        val links = _state.value.sniffedLinks
+        if (links.isEmpty()) return
+
+        viewModelScope.launch {
+            var addedCount = 0
+            for (link in links) {
+                try {
+                    val fileName = getUniqueFileName(
+                        link.fileName.ifEmpty { generateFileName(link.url) },
+                        currentDownloadDir
+                    )
+                    val taskId = repository.addTask(
+                        url = link.selectedUrl,
+                        outputName = fileName,
+                        outputDir = currentDownloadDir,
+                        headers = link.headers
+                    )
+                    DownloadService.start(context, taskId)
+                    addedCount++
+                } catch (_: Exception) { }
+            }
+            _state.update {
+                it.copy(
+                    success = "已添加 $addedCount 个任务",
+                    isSnifferPanelOpen = false
+                )
+            }
+        }
+    }
 
     fun clearSniffedLinks() {
         capturedUrls.clear()

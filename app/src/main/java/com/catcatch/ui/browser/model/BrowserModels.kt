@@ -11,8 +11,23 @@ data class SniffedLink(
     val variants: List<Variant> = emptyList(),
     val isPlaylist: Boolean = false,
     val source: SniffSource = SniffSource.NETWORK,
-    val timestamp: Long = System.currentTimeMillis()
-)
+    val timestamp: Long = System.currentTimeMillis(),
+    val selectedVariantIndex: Int = 0
+) {
+    /** 获取选中变体的 URL，无变体时返回自身 URL */
+    val selectedUrl: String
+        get() = if (variants.isNotEmpty()) {
+            variants.getOrElse(selectedVariantIndex) { variants.first() }.url
+        } else url
+
+    /** 最高码率变体 */
+    val bestVariant: Variant?
+        get() = variants.maxByOrNull { it.bandwidth }
+
+    /** 是否有多个变体可选 */
+    val hasVariants: Boolean
+        get() = variants.size > 1
+}
 
 /**
  * 多分辨率变体

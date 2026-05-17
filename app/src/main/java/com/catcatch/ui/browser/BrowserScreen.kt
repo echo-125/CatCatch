@@ -6,6 +6,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
@@ -20,12 +22,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -39,7 +41,10 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +53,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -63,6 +70,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -153,12 +161,13 @@ fun BrowserScreen(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
-            // 嗅探结果提示
+            // 嗅探结果提示条（可点击展开面板）
             if (state.sniffedLinks.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.primaryContainer)
+                        .clickable { viewModel.toggleSnifferPanel() }
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -168,9 +177,11 @@ fun BrowserScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
-                    TextButton(onClick = { viewModel.addTask(state.sniffedLinks.first()) }) {
-                        Text("添加下载")
-                    }
+                    Text(
+                        "点击查看详情",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
                 }
             }
 
@@ -189,10 +200,6 @@ fun BrowserScreen(
                             onWebViewCreated = { webViewRef = it },
                             onWebViewDisposed = { webViewRef = null }
                         )
-
-                        if (state.isLoading) {
-                            LoadingOverlay()
-                        }
                     }
 
                     BrowserMode.TAB_MANAGER -> {}
@@ -200,40 +207,44 @@ fun BrowserScreen(
             }
         }
 
-        // 悬浮嗅探按钮（仅在浏览模式显示，固定在顶层）
-        if (state.mode == BrowserMode.BROWSING) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                contentAlignment = Alignment.BottomEnd
-            ) {
-                FloatingActionButton(
-                    onClick = { viewModel.triggerDeepScan() },
-                    containerColor = if (state.sniffedLinks.isNotEmpty()) {
-                        MaterialTheme.colorScheme.primary
+        // 悬浮嗅探按钮（所有页面可见）
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            contentAlignment = Alignment.BottomEnd
+        ) {
+            FloatingActionButton(
+                onClick = {
+                    if (state.sniffedLinks.isNotEmpty()) {
+                        viewModel.toggleSnifferPanel()
                     } else {
-                        MaterialTheme.colorScheme.surfaceVariant
+                        viewModel.triggerDeepScan()
                     }
-                ) {
-                    Icon(
-                        Icons.Default.FileDownload,
-                        contentDescription = "嗅探",
-                        tint = if (state.sniffedLinks.isNotEmpty()) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
+                },
+                containerColor = if (state.sniffedLinks.isNotEmpty()) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
                 }
+            ) {
+                Icon(
+                    Icons.Default.FileDownload,
+                    contentDescription = "嗅探",
+                    tint = if (state.sniffedLinks.isNotEmpty()) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
             }
         }
 
-        // 标签管理器覆盖层（带动画）- 修复动画问题
+        // 标签管理器覆盖层（带动画）
         AnimatedVisibility(
             visible = state.isTabManagerOpen,
-            enter = slideInHorizontally(initialOffsetX = { -it }),
-            exit = slideOutHorizontally(targetOffsetX = { -it })
+            enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it / 3 }),
+            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it / 3 })
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 // 半透明背景
@@ -246,13 +257,13 @@ fun BrowserScreen(
 
                 // 标签管理面板
                 Row(modifier = Modifier.fillMaxSize()) {
-                    // 左侧面板（宽度 60%）
+                    // 左侧面板（宽度 33%）
                     Column(
                         modifier = Modifier
                             .fillMaxHeight()
-                            .fillMaxWidth(0.6f)
+                            .fillMaxWidth(0.33f)
                             .background(MaterialTheme.colorScheme.surface)
-                            .padding(16.dp)
+                            .padding(12.dp)
                     ) {
                         // 标题
                         Row(
@@ -262,7 +273,7 @@ fun BrowserScreen(
                         ) {
                             Text(
                                 "标签",
-                                style = MaterialTheme.typography.headlineMedium,
+                                style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             IconButton(onClick = { viewModel.newTab() }) {
@@ -297,6 +308,40 @@ fun BrowserScreen(
                     )
                 }
             }
+        }
+
+        // 嗅探结果弹窗
+        if (state.isSnifferPanelOpen) {
+            AlertDialog(
+                onDismissRequest = { viewModel.closeSnifferPanel() },
+                title = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("嗅探结果")
+                        TextButton(onClick = { viewModel.addAllTasks() }) {
+                            Text("全部添加")
+                        }
+                    }
+                },
+                text = {
+                    SnifferPanelContent(
+                        links = state.sniffedLinks,
+                        sniffMode = state.sniffMode,
+                        onSelectVariant = { url, index -> viewModel.selectVariant(url, index) },
+                        onAddTask = { link -> viewModel.addTask(link) },
+                        onSniffModeChange = { mode -> viewModel.setSniffMode(mode) }
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.closeSnifferPanel() }) {
+                        Text("关闭")
+                    }
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
         }
 
         // 消息提示
@@ -377,33 +422,6 @@ private fun AddressBar(
                 "$tabCount",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-
-        Spacer(modifier = Modifier.width(6.dp))
-
-        // 主页按钮（大一些）
-        IconButton(
-            onClick = onHome,
-            modifier = Modifier.size(navButtonSize)
-        ) {
-            Icon(
-                Icons.Default.Home,
-                "主页",
-                modifier = Modifier.size(navIconSize)
-            )
-        }
-
-        // 收藏按钮（五角星，点击后为黑色）
-        IconButton(
-            onClick = onFavorite,
-            modifier = Modifier.size(navButtonSize)
-        ) {
-            Icon(
-                if (isFavorite) Icons.Default.Star else Icons.Outlined.StarOutline,
-                "收藏",
-                modifier = Modifier.size(navIconSize),
-                tint = if (isFavorite) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
@@ -494,6 +512,31 @@ private fun AddressBar(
                 modifier = Modifier.size(navIconSize)
             )
         }
+
+        // 主页按钮
+        IconButton(
+            onClick = onHome,
+            modifier = Modifier.size(navButtonSize)
+        ) {
+            Icon(
+                Icons.Default.Home,
+                "主页",
+                modifier = Modifier.size(navIconSize)
+            )
+        }
+
+        // 收藏按钮（五角星，点击后为黑色）
+        IconButton(
+            onClick = onFavorite,
+            modifier = Modifier.size(navButtonSize)
+        ) {
+            Icon(
+                if (isFavorite) Icons.Default.Star else Icons.Outlined.StarOutline,
+                "收藏",
+                modifier = Modifier.size(navIconSize),
+                tint = if (isFavorite) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -521,34 +564,6 @@ private fun NewTabContent() {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    }
-}
-
-// ==================== 加载遮罩 ====================
-
-@Composable
-private fun LoadingOverlay() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(48.dp),
-                strokeWidth = 4.dp
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "正在加载...",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
     }
 }
 
@@ -608,6 +623,232 @@ private fun TabItem(
     }
 }
 
+// ==================== 嗅探结果弹窗内容 ====================
+
+@Composable
+private fun SnifferPanelContent(
+    links: List<com.catcatch.ui.browser.model.SniffedLink>,
+    sniffMode: SniffMode,
+    onSelectVariant: (String, Int) -> Unit,
+    onAddTask: (com.catcatch.ui.browser.model.SniffedLink) -> Unit,
+    onSniffModeChange: (SniffMode) -> Unit
+) {
+    var modeDropdownExpanded by remember { mutableStateOf(false) }
+
+    Column {
+        // 嗅探模式切换
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "嗅探模式",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Box {
+                AssistChip(
+                    onClick = { modeDropdownExpanded = true },
+                    label = { Text(sniffMode.label) },
+                    trailingIcon = {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                )
+                DropdownMenu(
+                    expanded = modeDropdownExpanded,
+                    onDismissRequest = { modeDropdownExpanded = false }
+                ) {
+                    SniffMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(mode.label) },
+                            onClick = {
+                                onSniffModeChange(mode)
+                                modeDropdownExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            "共 ${links.size} 个链接",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 可滚动链接列表
+        LazyColumn(
+            modifier = Modifier.heightIn(max = 400.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(links, key = { it.url }) { link ->
+                SniffedLinkItem(
+                    link = link,
+                    onSelectVariant = { index -> onSelectVariant(link.url, index) },
+                    onAdd = { onAddTask(link) }
+                )
+            }
+        }
+    }
+}
+
+// ==================== 嗅探链接卡片 ====================
+
+@Composable
+private fun SniffedLinkItem(
+    link: com.catcatch.ui.browser.model.SniffedLink,
+    onSelectVariant: (Int) -> Unit,
+    onAdd: () -> Unit
+) {
+    var dropdownExpanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // 第一行：文件名 + 来源标签
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    link.fileName.ifEmpty { link.url.substringAfterLast("/").take(30) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // 来源标签
+                val sourceColor = when (link.source) {
+                    com.catcatch.ui.browser.model.SniffSource.NETWORK -> MaterialTheme.colorScheme.tertiary
+                    com.catcatch.ui.browser.model.SniffSource.DOM -> MaterialTheme.colorScheme.primary
+                    com.catcatch.ui.browser.model.SniffSource.DEEP_SCAN -> MaterialTheme.colorScheme.secondary
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(sourceColor.copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        link.source.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = sourceColor
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // 第二行：时长 + 变体信息
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (link.duration > 0) {
+                    Text(
+                        com.catcatch.ui.browser.model.formatDuration(link.duration),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (link.variants.isNotEmpty()) {
+                    Text(
+                        "${link.variants.size} 个分辨率",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 第三行：变体选择（有变体时）
+            if (link.hasVariants) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { dropdownExpanded = true }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val selected = link.variants.getOrElse(link.selectedVariantIndex) { link.variants.first() }
+                        Text(
+                            "${selected.resolutionText} · ${selected.bandwidthText}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "选择分辨率",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = dropdownExpanded,
+                        onDismissRequest = { dropdownExpanded = false }
+                    ) {
+                        link.variants.forEachIndexed { index, variant ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "${variant.resolutionText} · ${variant.metaText}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                },
+                                onClick = {
+                                    onSelectVariant(index)
+                                    dropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 底部：添加下载按钮
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onAdd) {
+                    Icon(
+                        Icons.Default.FileDownload,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("添加下载")
+                }
+            }
+        }
+    }
+}
+
 // ==================== WebView ====================
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -637,31 +878,24 @@ private fun CatCatchWebView(
                         onM3u8Found = { m3u8Url, headers ->
                             viewModel.onM3u8Sniffed(m3u8Url, headers, SniffSource.DOM)
                         },
-                        onLog = { message ->
-                            viewModel.addLog("[JS] $message")
-                        },
-                        onTitle = { title ->
-                            viewModel.onPageTitleChanged(title)
-                        }
+                        onLog = { message -> viewModel.addLog("[JS] $message") },
+                        onTitle = { title -> viewModel.onPageTitleChanged(title) }
                     ),
                     SnifferBridge.BRIDGE_NAME
                 )
 
                 webViewClient = object : WebViewClient() {
                     override fun shouldInterceptRequest(
-                        view: WebView,
-                        request: WebResourceRequest
+                        view: WebView, request: WebResourceRequest
                     ): WebResourceResponse? {
-                        val requestUrl = request.url.toString()
-                        if (requestUrl.contains(".m3u8", ignoreCase = true)) {
-                            viewModel.onNetworkM3u8Sniffed(requestUrl)
+                        if (request.url.toString().contains(".m3u8", ignoreCase = true)) {
+                            viewModel.onNetworkM3u8Sniffed(request.url.toString())
                         }
                         return super.shouldInterceptRequest(view, request)
                     }
 
                     override fun shouldOverrideUrlLoading(
-                        view: WebView,
-                        request: WebResourceRequest
+                        view: WebView, request: WebResourceRequest
                     ): Boolean {
                         val requestUrl = request.url.toString()
                         if (SiteConfigs.isAdUrl(requestUrl)) {
@@ -680,16 +914,13 @@ private fun CatCatchWebView(
                         super.onPageFinished(view, url)
                         url?.let { viewModel.onPageFinished(it) }
                         viewModel.updateNavigationState(view.canGoBack(), view.canGoForward())
-                        view.title?.let { title ->
-                            viewModel.onPageTitleChanged(title)
-                        }
+                        view.title?.let { viewModel.onPageTitleChanged(it) }
                         if (snifferScript.isNotEmpty()) {
                             view.evaluateJavascript(snifferScript, null)
                         }
                     }
                 }
 
-                // 通知 WebView 创建
                 onWebViewCreated(this)
 
                 if (url.isNotEmpty()) {
@@ -704,7 +935,6 @@ private fun CatCatchWebView(
             }
         },
         onReset = { view ->
-            // WebView 被移除时清理
             view.destroy()
             onWebViewDisposed()
         }
