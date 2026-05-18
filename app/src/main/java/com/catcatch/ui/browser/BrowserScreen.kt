@@ -45,6 +45,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Public
@@ -302,8 +303,13 @@ fun BrowserScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            IconButton(onClick = { viewModel.newTab() }) {
-                                Icon(Icons.Default.Add, "新建标签")
+                            Row {
+                                IconButton(onClick = { viewModel.closeAllTabs() }) {
+                                    Icon(Icons.Default.DeleteSweep, "清除所有标签")
+                                }
+                                IconButton(onClick = { viewModel.newTab() }) {
+                                    Icon(Icons.Default.Add, "新建标签")
+                                }
                             }
                         }
 

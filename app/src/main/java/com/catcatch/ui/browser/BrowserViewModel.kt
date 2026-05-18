@@ -285,6 +285,22 @@ class BrowserViewModel @Inject constructor(
     }
 
     /**
+     * 关闭所有标签页，重置为空白新标签
+     */
+    fun closeAllTabs() {
+        val newTab = Tab()
+        _state.update {
+            it.copy(
+                tabs = listOf(newTab),
+                activeTabId = newTab.id,
+                mode = BrowserMode.NEW_TAB,
+                isTabManagerOpen = false
+            )
+        }
+        capturedUrls.clear()
+    }
+
+    /**
      * 切换标签页
      */
     fun switchTab(tabId: String) {
