@@ -115,6 +115,9 @@ dependencies {
     // DocumentFile (SAF)
     implementation(libs.documentfile)
 
+    // Coil (图片加载)
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     // FFmpeg-kit (本地 AAR，包含预编译 native 库)
     implementation(files("libs/ffmpeg-kit-full-6.0-2.LTS.aar"))
     implementation("com.arthenica:smart-exception-java:0.2.1")

@@ -14,6 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.catcatch.domain.model.TaskStatus
 import com.catcatch.ui.browser.BrowserScreen
+import com.catcatch.ui.browser.BrowserViewModel
 import com.catcatch.ui.download.DownloadScreen
 import com.catcatch.ui.home.HomeScreen
 import com.catcatch.ui.home.HomeViewModel
@@ -32,6 +33,8 @@ fun MainScreen(
 
     // 共享 ViewModel，避免重复创建导致 Deep Link 数据被多次处理
     val sharedViewModel: HomeViewModel = hiltViewModel()
+    // 浏览器 ViewModel，提升到 MainScreen 级别避免切换 tab 时丢失标签状态
+    val sharedBrowserViewModel: BrowserViewModel = hiltViewModel()
     val taskListState by sharedViewModel.taskListState.collectAsState()
     val activeTaskCount by remember(taskListState) {
         derivedStateOf {
@@ -54,7 +57,7 @@ fun MainScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             composable(Screen.Home.route) { HomeScreen(viewModel = sharedViewModel) }
-            composable(Screen.Browser.route) { BrowserScreen() }
+            composable(Screen.Browser.route) { BrowserScreen(viewModel = sharedBrowserViewModel) }
             composable(Screen.Downloads.route) { DownloadScreen(viewModel = sharedViewModel) }
             composable(Screen.Settings.route) { SettingsScreen() }
         }

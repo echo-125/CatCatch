@@ -1,9 +1,12 @@
 package com.catcatch.ui.browser
 
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.catcatch.data.local.AppPreferences
+import com.catcatch.data.local.ShortcutDao
+import com.catcatch.data.local.ShortcutEntity
 import com.catcatch.data.remote.M3U8Parser
 import com.catcatch.data.repository.DownloadRepository
 import com.catcatch.data.repository.SettingsRepository
@@ -116,6 +119,7 @@ data class BrowserState(
 class BrowserViewModel @Inject constructor(
     private val repository: DownloadRepository,
     private val settingsRepository: SettingsRepository,
+    private val shortcutDao: ShortcutDao,
     private val okHttpClient: OkHttpClient,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -123,11 +127,21 @@ class BrowserViewModel @Inject constructor(
     private val _state = MutableStateFlow(BrowserState())
     val state: StateFlow<BrowserState> = _state.asStateFlow()
 
+    private val _shortcuts = MutableStateFlow<List<ShortcutEntity>>(emptyList())
+    val shortcuts: StateFlow<List<ShortcutEntity>> = _shortcuts.asStateFlow()
+
     private val m3u8Parser = M3U8Parser(okHttpClient)
     private var currentDownloadDir = AppPreferences.DEFAULT_DOWNLOAD_DIR
     private val capturedUrls = mutableSetOf<String>()
 
     init {
+        // 加载快捷方式
+        viewModelScope.launch {
+            shortcutDao.getAll().collect { list ->
+                _shortcuts.value = list
+            }
+        }
+        // 加载下载目录配置
         viewModelScope.launch {
             settingsRepository.downloadDir.collect { dir ->
                 currentDownloadDir = dir
@@ -296,10 +310,45 @@ class BrowserViewModel @Inject constructor(
     }
 
     /**
-     * 切换收藏状态
+     * 切换收藏状态（同时管理快捷方式）
      */
     fun toggleFavorite() {
-        updateActiveTab { it.copy(isFavorite = !it.isFavorite) }
+        val tab = _state.value.activeTab ?: return
+        if (tab.url.isEmpty()) return
+
+        viewModelScope.launch {
+            val isCurrentlyFavorite = shortcutDao.existsByUrl(tab.url)
+            if (isCurrentlyFavorite) {
+                shortcutDao.deleteByUrl(tab.url)
+            } else {
+                if (shortcutDao.count() < MAX_SHORTCUTS) {
+                    val title = tab.title.ifEmpty {
+                        Uri.parse(tab.url).host ?: tab.url
+                    }
+                    shortcutDao.insert(
+                        ShortcutEntity(
+                            url = tab.url,
+                            title = title.take(MAX_TITLE_LENGTH)
+                        )
+                    )
+                }
+            }
+            updateActiveTab { it.copy(isFavorite = !isCurrentlyFavorite) }
+        }
+    }
+
+    /**
+     * 移除快捷方式
+     */
+    fun removeShortcut(url: String) {
+        viewModelScope.launch {
+            shortcutDao.deleteByUrl(url)
+            // 同步更新当前标签的收藏状态
+            val currentUrl = _state.value.currentUrl
+            if (currentUrl == url) {
+                updateActiveTab { it.copy(isFavorite = false) }
+            }
+        }
     }
 
     fun onPageStarted(url: String) {
@@ -308,6 +357,11 @@ class BrowserViewModel @Inject constructor(
 
     fun onPageFinished(url: String) {
         updateActiveTab { it.copy(isLoading = false, url = url) }
+        // 同步数据库中的收藏状态
+        viewModelScope.launch {
+            val isFav = shortcutDao.existsByUrl(url)
+            updateActiveTab { it.copy(isFavorite = isFav) }
+        }
     }
 
     fun updateNavigationState(canGoBack: Boolean, canGoForward: Boolean) {
@@ -687,5 +741,12 @@ class BrowserViewModel @Inject constructor(
             }
         }
         return totalDuration
+    }
+
+    companion object {
+        /** 最大快捷方式数量 */
+        private const val MAX_SHORTCUTS = 12
+        /** 快捷方式标题最大长度 */
+        private const val MAX_TITLE_LENGTH = 20
     }
 }

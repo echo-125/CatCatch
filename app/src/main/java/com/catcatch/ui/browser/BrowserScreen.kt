@@ -13,6 +13,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -40,7 +45,9 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.outlined.StarOutline
+import coil.compose.AsyncImage
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -70,6 +77,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -88,6 +98,7 @@ fun BrowserScreen(
     viewModel: BrowserViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val shortcuts by viewModel.shortcuts.collectAsState()
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
 
@@ -121,8 +132,9 @@ fun BrowserScreen(
 
     // 本地 URL 输入状态，避免频繁触发重组
     var localUrl by remember { mutableStateOf(state.currentUrl) }
+    var isEditing by remember { mutableStateOf(false) }
     LaunchedEffect(state.currentUrl) {
-        if (localUrl != state.currentUrl) {
+        if (!isEditing && localUrl != state.currentUrl) {
             localUrl = state.currentUrl
         }
     }
@@ -140,14 +152,19 @@ fun BrowserScreen(
                 isNewTab = state.mode == BrowserMode.NEW_TAB,
                 isFavorite = state.isCurrentTabFavorite,
                 onUrlChange = { newUrl ->
+                    isEditing = true
                     localUrl = newUrl
                     viewModel.onUrlChange(newUrl)
                 },
                 onLoad = {
+                    isEditing = false
                     focusManager.clearFocus()
                     viewModel.loadUrl(localUrl)
                 },
-                onHome = viewModel::goHome,
+                onHome = {
+                    localUrl = ""
+                    viewModel.goHome()
+                },
                 onBack = { webViewRef?.goBack() },
                 onForward = { webViewRef?.goForward() },
                 onRefresh = { viewModel.loadUrl(localUrl) },
@@ -189,10 +206,20 @@ fun BrowserScreen(
             Box(modifier = Modifier.weight(1f)) {
                 when (state.mode) {
                     BrowserMode.NEW_TAB -> {
-                        NewTabContent()
+                        NewTabContent(
+                            shortcuts = shortcuts,
+                            onShortcutClick = { url -> viewModel.loadUrl(url) },
+                            onShortcutDelete = { url -> viewModel.removeShortcut(url) }
+                        )
                     }
 
                     BrowserMode.BROWSING -> {
+                        // WebView 加载中显示指示器，避免白屏
+                        if (state.isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        }
                         CatCatchWebView(
                             url = state.currentUrl,
                             snifferScript = snifferScript,
@@ -447,6 +474,8 @@ private fun AddressBar(
                     color = MaterialTheme.colorScheme.onSurface
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onLoad() }),
                 decorationBox = { innerTextField ->
                     Box {
                         if (url.isEmpty()) {
@@ -543,26 +572,127 @@ private fun AddressBar(
 // ==================== 新标签页内容 ====================
 
 @Composable
-private fun NewTabContent() {
-    Column(
+private fun NewTabContent(
+    shortcuts: List<com.catcatch.data.local.ShortcutEntity>,
+    onShortcutClick: (String) -> Unit,
+    onShortcutDelete: (String) -> Unit
+) {
+    // 待删除的快捷方式
+    var shortcutToDelete by remember { mutableStateOf<com.catcatch.data.local.ShortcutEntity?>(null) }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .padding(16.dp)
     ) {
-        Text(
-            "CatCatch",
-            style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.primary
+        if (shortcuts.isNotEmpty()) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(shortcuts) { shortcut ->
+                    ShortcutItem(
+                        shortcut = shortcut,
+                        onClick = { onShortcutClick(shortcut.url) },
+                        onLongClick = { shortcutToDelete = shortcut }
+                    )
+                }
+            }
+        } else {
+            // 空状态提示
+            Text(
+                "收藏网站后会在这里显示",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+    }
+
+    // 删除确认对话框
+    shortcutToDelete?.let { shortcut ->
+        AlertDialog(
+            onDismissRequest = { shortcutToDelete = null },
+            title = { Text("删除快捷方式") },
+            text = { Text("确定删除「${shortcut.title}」？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onShortcutDelete(shortcut.url)
+                    shortcutToDelete = null
+                }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { shortcutToDelete = null }) {
+                    Text("取消")
+                }
+            }
         )
+    }
+}
 
-        Spacer(modifier = Modifier.height(8.dp))
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ShortcutItem(
+    shortcut: com.catcatch.data.local.ShortcutEntity,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val host = try {
+        android.net.Uri.parse(shortcut.url).host ?: ""
+    } catch (e: Exception) {
+        ""
+    }
 
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Favicon 图标
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (host.isNotEmpty()) {
+                AsyncImage(
+                    model = "https://favicon.im/$host",
+                    contentDescription = shortcut.title,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                )
+            } else {
+                Icon(
+                    Icons.Default.Public,
+                    contentDescription = shortcut.title,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // 标题
         Text(
-            "输入网址开始浏览",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = shortcut.title,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }

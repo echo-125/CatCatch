@@ -7,10 +7,11 @@ import androidx.room.RoomDatabase
  * Room 数据库
  */
 @Database(
-    entities = [TaskEntity::class],
-    version = 3,
+    entities = [TaskEntity::class, ShortcutEntity::class],
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
+    abstract fun shortcutDao(): ShortcutDao
 }

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.catcatch.data.local.AppDatabase
+import com.catcatch.data.local.ShortcutDao
 import com.catcatch.data.local.TaskDao
 import com.catcatch.data.remote.M3U8Parser
 import com.catcatch.data.repository.DownloadRepository
@@ -66,6 +67,15 @@ object AppModule {
     @Singleton
     fun provideTaskDao(database: AppDatabase): TaskDao {
         return database.taskDao()
+    }
+
+    /**
+     * 提供 ShortcutDao
+     */
+    @Provides
+    @Singleton
+    fun provideShortcutDao(database: AppDatabase): ShortcutDao {
+        return database.shortcutDao()
     }
 
     /**
