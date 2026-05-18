@@ -17,6 +17,7 @@ object AppPreferences {
     val TRANSCODE_MODE = intPreferencesKey("transcode_mode")  // 0=自动, 1=FFmpeg-kit, 2=系统原生
     val SILENT_MODE = booleanPreferencesKey("silent_mode")  // 静默添加模式
     val BROWSER_TABS = stringPreferencesKey("browser_tabs")  // 浏览器标签页 JSON
+    val BROWSER_SSL_STRICT = booleanPreferencesKey("browser_ssl_strict")  // SSL 严格模式
 
     // 默认值
     const val DEFAULT_DOWNLOAD_DIR = "/storage/emulated/0/Download/CatCatch"
@@ -26,4 +27,5 @@ object AppPreferences {
     const val DEFAULT_DARK_MODE = 0
     const val DEFAULT_TRANSCODE_MODE = 1
     const val DEFAULT_SILENT_MODE = false
+    const val DEFAULT_BROWSER_SSL_STRICT = false  // 默认忽略证书错误
 }

@@ -1,6 +1,9 @@
 package com.catcatch.ui.browser
 
 import android.annotation.SuppressLint
+import android.net.http.SslError
+import android.webkit.SslErrorHandler
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -209,7 +212,8 @@ fun BrowserScreen(
                     tabs = state.tabs,
                     activeTabId = state.activeTabId,
                     snifferScript = snifferScript,
-                    viewModel = viewModel
+                    viewModel = viewModel,
+                    sslStrictMode = state.sslStrictMode
                 )
 
                 // 非浏览模式时覆盖遮罩
@@ -983,7 +987,8 @@ private fun CatCatchWebView(
     tabs: List<Tab>,
     activeTabId: String,
     snifferScript: String,
-    viewModel: BrowserViewModel
+    viewModel: BrowserViewModel,
+    sslStrictMode: Boolean = true
 ) {
     val webViews = remember { mutableMapOf<String, WebView>() }
     val context = LocalContext.current
@@ -1028,7 +1033,7 @@ private fun CatCatchWebView(
             // 创建有 URL 的标签的 WebView（空标签不创建，避免 MIUI 拦截器崩溃）
             for (tab in tabs) {
                 if (tab.id !in webViews && tab.url.isNotEmpty()) {
-                    val webView = createWebView(context, tab.id, snifferScript, viewModel)
+                    val webView = createWebView(context, tab.id, snifferScript, viewModel, sslStrictMode)
                     webViews[tab.id] = webView
                     container.addView(webView)
                 }
@@ -1076,7 +1081,8 @@ private fun createWebView(
     context: android.content.Context,
     tabId: String,
     snifferScript: String,
-    viewModel: BrowserViewModel
+    viewModel: BrowserViewModel,
+    sslStrictMode: Boolean = true
 ): WebView {
     return WebView(context).apply {
         settings.apply {
@@ -1087,6 +1093,8 @@ private fun createWebView(
             setSupportZoom(true)
             builtInZoomControls = true
             displayZoomControls = false
+            userAgentString = android.webkit.WebSettings.getDefaultUserAgent(context)
+                .replace("; wv)", ")")
         }
 
         addJavascriptInterface(
@@ -1122,10 +1130,31 @@ private fun createWebView(
             }
 
             override fun onReceivedSslError(
-                view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError
+                view: WebView, handler: SslErrorHandler, error: SslError
             ) {
-                // 视频网站常有证书问题，允许继续访问
-                handler.proceed()
+                if (sslStrictMode) {
+                    viewModel.addLog("[SSL] 证书错误，已拦截: ${error.url?.take(80)}")
+                    handler.cancel()
+                } else {
+                    viewModel.addLog("[SSL] 证书错误，已忽略: ${error.url?.take(80)}")
+                    handler.proceed()
+                }
+            }
+
+            override fun onReceivedError(
+                view: WebView, request: WebResourceRequest, error: WebResourceError
+            ) {
+                if (request.isForMainFrame) {
+                    viewModel.addLog("[错误] ${error.errorCode}: ${error.description} | ${request.url?.toString()?.take(80)}")
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse
+            ) {
+                if (request.isForMainFrame) {
+                    viewModel.addLog("[HTTP ${errorResponse.statusCode}] ${request.url?.toString()?.take(80)}")
+                }
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {

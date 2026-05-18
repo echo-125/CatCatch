@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.VideoSettings
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -187,6 +188,12 @@ fun SettingsScreen(
                         title = "静默添加模式",
                         subtitle = if (state.silentMode) "Deep Link 自动添加任务，跳过确认" else "Deep Link 填充表单，手动确认",
                         onClick = { viewModel.updateSilentMode(!state.silentMode) }
+                    )
+                    SettingsItem(
+                        icon = Icons.Default.Lock,
+                        title = "SSL 严格模式",
+                        subtitle = if (state.sslStrictMode) "严格验证证书（推荐）" else "忽略证书错误，允许访问证书异常的网站",
+                        onClick = { viewModel.updateSslStrictMode(!state.sslStrictMode) }
                     )
                 }
             }

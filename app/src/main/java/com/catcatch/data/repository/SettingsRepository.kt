@@ -49,6 +49,10 @@ class SettingsRepository(
         it[AppPreferences.BROWSER_TABS]
     }
 
+    val browserSslStrict: Flow<Boolean> = dataStore.data.map {
+        it[AppPreferences.BROWSER_SSL_STRICT] ?: AppPreferences.DEFAULT_BROWSER_SSL_STRICT
+    }
+
     suspend fun setDownloadDir(value: String) {
         dataStore.edit { it[AppPreferences.DOWNLOAD_DIR] = value }
     }
@@ -95,5 +99,9 @@ class SettingsRepository(
                 it.remove(AppPreferences.BROWSER_TABS)
             }
         }
+    }
+
+    suspend fun setBrowserSslStrict(value: Boolean) {
+        dataStore.edit { it[AppPreferences.BROWSER_SSL_STRICT] = value }
     }
 }

@@ -58,6 +58,7 @@ data class BrowserState(
     val isSnifferPanelOpen: Boolean = false,
     val sniffMode: SniffMode = SniffMode.AUTO,
     val siteConfig: SiteConfig? = null,
+    val sslStrictMode: Boolean = true,
     val logs: List<String> = emptyList(),
     val success: String? = null,
     val error: String? = null
@@ -180,6 +181,12 @@ class BrowserViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.downloadDir.collect { dir ->
                 currentDownloadDir = dir
+            }
+        }
+        // 加载 SSL 严格模式配置
+        viewModelScope.launch {
+            settingsRepository.browserSslStrict.collect { strict ->
+                _state.update { it.copy(sslStrictMode = strict) }
             }
         }
         // 恢复标签页（仅启动时恢复一次，避免保存后重复恢复覆盖运行时状态）

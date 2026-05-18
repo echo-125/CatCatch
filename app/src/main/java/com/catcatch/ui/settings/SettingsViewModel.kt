@@ -31,6 +31,7 @@ data class SettingsState(
     val darkMode: Int = AppPreferences.DEFAULT_DARK_MODE,
     val transcodeMode: Int = AppPreferences.DEFAULT_TRANSCODE_MODE,
     val silentMode: Boolean = AppPreferences.DEFAULT_SILENT_MODE,
+    val sslStrictMode: Boolean = AppPreferences.DEFAULT_BROWSER_SSL_STRICT,
     val cacheSize: Long = 0
 )
 
@@ -71,9 +72,10 @@ class SettingsViewModel @Inject constructor(
                 combine(
                     settingsRepository.darkMode,
                     settingsRepository.transcodeMode,
-                    settingsRepository.silentMode
-                ) { dark, transcode, silent ->
-                    arrayOf(dark, transcode, silent)
+                    settingsRepository.silentMode,
+                    settingsRepository.browserSslStrict
+                ) { dark, transcode, silent, sslStrict ->
+                    arrayOf(dark, transcode, silent, sslStrict)
                 }
             ) { first, second ->
                 SettingsState(
@@ -84,7 +86,8 @@ class SettingsViewModel @Inject constructor(
                     maxConcurrentSegments = first[4] as Int,
                     darkMode = second[0] as Int,
                     transcodeMode = second[1] as Int,
-                    silentMode = second[2] as Boolean
+                    silentMode = second[2] as Boolean,
+                    sslStrictMode = second[3] as Boolean
                 )
             }.collect { newState ->
                 _state.update { it.copy(
@@ -95,7 +98,8 @@ class SettingsViewModel @Inject constructor(
                     maxConcurrentSegments = newState.maxConcurrentSegments,
                     darkMode = newState.darkMode,
                     transcodeMode = newState.transcodeMode,
-                    silentMode = newState.silentMode
+                    silentMode = newState.silentMode,
+                    sslStrictMode = newState.sslStrictMode
                 ) }
             }
         }
@@ -145,6 +149,10 @@ class SettingsViewModel @Inject constructor(
 
     fun updateSilentMode(value: Boolean) {
         viewModelScope.launch { settingsRepository.setSilentMode(value) }
+    }
+
+    fun updateSslStrictMode(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setBrowserSslStrict(value) }
     }
 
     fun loadCacheSize() {
