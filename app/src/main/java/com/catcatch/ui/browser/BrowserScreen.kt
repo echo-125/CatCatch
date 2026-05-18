@@ -1121,6 +1121,13 @@ private fun createWebView(
                 return false
             }
 
+            override fun onReceivedSslError(
+                view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError
+            ) {
+                // 视频网站常有证书问题，允许继续访问
+                handler.proceed()
+            }
+
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 url?.let { viewModel.onPageStarted(it, tabId) }
