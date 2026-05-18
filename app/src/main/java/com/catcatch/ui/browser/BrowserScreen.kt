@@ -422,7 +422,7 @@ private fun AddressBar(
     onDeepScan: () -> Unit,
     onFavorite: () -> Unit
 ) {
-    val tabButtonSize = 32.dp
+    val tabButtonSize = 36.dp
     val navButtonSize = 44.dp
     val navIconSize = 24.dp
 
@@ -433,15 +433,15 @@ private fun AddressBar(
             .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 标签管理按钮（最左侧，圆形，带黑色边框）
+        // 标签管理按钮
         Box(
             modifier = Modifier
                 .size(tabButtonSize)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surface)
                 .border(
-                    width = 1.5.dp,
-                    color = Color.Black,
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
                     shape = CircleShape
                 )
                 .clickable { onTabManager() },
@@ -449,8 +449,9 @@ private fun AddressBar(
         ) {
             Text(
                 "$tabCount",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
             )
         }
 
