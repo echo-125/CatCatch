@@ -31,7 +31,7 @@ fun StatusChip(
 
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(50),
+        shape = RoundedCornerShape(8.dp),
         color = backgroundColor
     ) {
         Text(

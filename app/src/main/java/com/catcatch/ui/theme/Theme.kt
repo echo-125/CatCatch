@@ -10,24 +10,54 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
-private val DarkColorScheme = darkColorScheme(
-    primary = TealPrimaryDark,
-    primaryContainer = TealPrimaryContainerDark,
-    background = BackgroundDark,
-    surface = SurfaceDark,
-    surfaceVariant = SurfaceVariantDark,
-    onSurface = OnSurfaceDark,
-    onSurfaceVariant = OnSurfaceVariantDark
+private val LightColorScheme = lightColorScheme(
+    primary = BluePrimary,
+    onPrimary = androidx.compose.ui.graphics.Color.White,
+    primaryContainer = BluePrimaryContainer,
+    onPrimaryContainer = BlueOnPrimaryContainer,
+    secondary = BluePrimaryLight,
+    secondaryContainer = BlueSecondaryContainer,
+    onSecondaryContainer = BlueOnSecondaryContainer,
+    tertiary = BluePrimaryLight,
+    tertiaryContainer = BlueTertiaryContainer,
+    onTertiaryContainer = BlueOnTertiaryContainer,
+    background = BackgroundLight,
+    onBackground = OnSurfaceLight,
+    surface = SurfaceLight,
+    onSurface = OnSurfaceLight,
+    surfaceVariant = SurfaceVariantLight,
+    onSurfaceVariant = OnSurfaceVariantLight,
+    outline = OutlineLight,
+    outlineVariant = OutlineVariantLight,
+    error = androidx.compose.ui.graphics.Color(0xFFB3261E),
+    onError = androidx.compose.ui.graphics.Color.White,
+    errorContainer = androidx.compose.ui.graphics.Color(0xFFF9DEDC),
+    onErrorContainer = androidx.compose.ui.graphics.Color(0xFF410E0B)
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = TealPrimary,
-    primaryContainer = TealPrimaryContainer,
-    background = BackgroundLight,
-    surface = SurfaceLight,
-    surfaceVariant = SurfaceVariantLight,
-    onSurface = OnSurfaceLight,
-    onSurfaceVariant = OnSurfaceVariantLight
+private val DarkColorScheme = darkColorScheme(
+    primary = BluePrimaryDark,
+    onPrimary = androidx.compose.ui.graphics.Color(0xFF003258),
+    primaryContainer = BluePrimaryContainerDark,
+    onPrimaryContainer = BlueOnPrimaryContainerDark,
+    secondary = BluePrimaryDark,
+    secondaryContainer = BlueSecondaryContainerDark,
+    onSecondaryContainer = BlueOnSecondaryContainerDark,
+    tertiary = BluePrimaryDark,
+    tertiaryContainer = BlueTertiaryContainerDark,
+    onTertiaryContainer = BlueOnTertiaryContainerDark,
+    background = BackgroundDark,
+    onBackground = OnSurfaceDark,
+    surface = SurfaceDark,
+    onSurface = OnSurfaceDark,
+    surfaceVariant = SurfaceVariantDark,
+    onSurfaceVariant = OnSurfaceVariantDark,
+    outline = OutlineDark,
+    outlineVariant = OutlineVariantDark,
+    error = ErrorDark,
+    onError = androidx.compose.ui.graphics.Color(0xFF601410),
+    errorContainer = ErrorContainerDark,
+    onErrorContainer = androidx.compose.ui.graphics.Color(0xFFF9DEDC)
 )
 
 @Composable
@@ -47,6 +77,8 @@ fun CatCatchTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
+        typography = CatCatchTypography,
+        shapes = CatCatchShapes,
         content = content
     )
 }
