@@ -16,6 +16,7 @@ object AppPreferences {
     val DARK_MODE = intPreferencesKey("dark_mode")  // 0=跟随系统, 1=浅色, 2=深色
     val TRANSCODE_MODE = intPreferencesKey("transcode_mode")  // 0=自动, 1=FFmpeg-kit, 2=系统原生
     val SILENT_MODE = booleanPreferencesKey("silent_mode")  // 静默添加模式
+    val BROWSER_TABS = stringPreferencesKey("browser_tabs")  // 浏览器标签页 JSON
 
     // 默认值
     const val DEFAULT_DOWNLOAD_DIR = "/storage/emulated/0/Download/CatCatch"

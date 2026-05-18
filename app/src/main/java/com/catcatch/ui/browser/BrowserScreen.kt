@@ -65,7 +65,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,9 +105,6 @@ fun BrowserScreen(
     val shortcuts by viewModel.shortcuts.collectAsState()
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
-
-    // WebView 引用，用于后退/前进
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
     // 加载 JS 脚本
     var snifferScript by remember { mutableStateOf("") }
@@ -150,13 +149,12 @@ fun BrowserScreen(
                 isLoading = state.isLoading,
                 canGoBack = state.canGoBack,
                 canGoForward = state.canGoForward,
-                sniffedCount = state.sniffedLinks.size,
+                sniffedCount = state.activeTabSniffedLinks.size,
                 isNewTab = state.mode == BrowserMode.NEW_TAB,
                 isFavorite = state.isCurrentTabFavorite,
                 onUrlChange = { newUrl ->
                     isEditing = true
                     localUrl = newUrl
-                    viewModel.onUrlChange(newUrl)
                 },
                 onLoad = {
                     isEditing = false
@@ -167,8 +165,8 @@ fun BrowserScreen(
                     localUrl = ""
                     viewModel.goHome()
                 },
-                onBack = { webViewRef?.goBack() },
-                onForward = { webViewRef?.goForward() },
+                onBack = { viewModel.goBack() },
+                onForward = { viewModel.goForward() },
                 onRefresh = { viewModel.loadUrl(localUrl) },
                 onTabManager = viewModel::toggleTabManager,
                 onDeepScan = { viewModel.triggerDeepScan() },
@@ -181,7 +179,7 @@ fun BrowserScreen(
             }
 
             // 嗅探结果提示条（可点击展开面板）
-            if (state.sniffedLinks.isNotEmpty()) {
+            if (state.activeTabSniffedLinks.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -192,7 +190,7 @@ fun BrowserScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "发现 ${state.sniffedLinks.size} 个 M3U8 链接",
+                        "发现 ${state.activeTabSniffedLinks.size} 个 M3U8 链接",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
@@ -204,34 +202,29 @@ fun BrowserScreen(
                 }
             }
 
-            // 内容区
+            // 内容区：WebView 始终保持在 composition 中，避免切换模式时丢失状态
             Box(modifier = Modifier.weight(1f)) {
-                when (state.mode) {
-                    BrowserMode.NEW_TAB -> {
+                // WebView 始终存在，切换模式时不销毁
+                CatCatchWebView(
+                    tabs = state.tabs,
+                    activeTabId = state.activeTabId,
+                    snifferScript = snifferScript,
+                    viewModel = viewModel
+                )
+
+                // 非浏览模式时覆盖遮罩
+                if (state.mode != BrowserMode.BROWSING) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface)
+                    ) {
                         NewTabContent(
                             shortcuts = shortcuts,
                             onShortcutClick = { url -> viewModel.loadUrl(url) },
                             onShortcutDelete = { url -> viewModel.removeShortcut(url) }
                         )
                     }
-
-                    BrowserMode.BROWSING -> {
-                        // WebView 加载中显示指示器，避免白屏
-                        if (state.isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.align(Alignment.Center)
-                            )
-                        }
-                        CatCatchWebView(
-                            url = state.currentUrl,
-                            snifferScript = snifferScript,
-                            viewModel = viewModel,
-                            onWebViewCreated = { webViewRef = it },
-                            onWebViewDisposed = { webViewRef = null }
-                        )
-                    }
-
-                    BrowserMode.TAB_MANAGER -> {}
                 }
             }
         }
@@ -245,13 +238,13 @@ fun BrowserScreen(
         ) {
             FloatingActionButton(
                 onClick = {
-                    if (state.sniffedLinks.isNotEmpty()) {
+                    if (state.activeTabSniffedLinks.isNotEmpty()) {
                         viewModel.toggleSnifferPanel()
                     } else {
                         viewModel.triggerDeepScan()
                     }
                 },
-                containerColor = if (state.sniffedLinks.isNotEmpty()) {
+                containerColor = if (state.activeTabSniffedLinks.isNotEmpty()) {
                     MaterialTheme.colorScheme.primary
                 } else {
                     MaterialTheme.colorScheme.surfaceVariant
@@ -260,7 +253,7 @@ fun BrowserScreen(
                 Icon(
                     Icons.Default.Search,
                     contentDescription = "嗅探",
-                    tint = if (state.sniffedLinks.isNotEmpty()) {
+                    tint = if (state.activeTabSniffedLinks.isNotEmpty()) {
                         MaterialTheme.colorScheme.onPrimary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -357,7 +350,7 @@ fun BrowserScreen(
                 },
                 text = {
                     SnifferPanelContent(
-                        links = state.sniffedLinks,
+                        links = state.activeTabSniffedLinks,
                         sniffMode = state.sniffMode,
                         onSelectVariant = { url, index -> viewModel.selectVariant(url, index) },
                         onAddTask = { link -> viewModel.addTask(link) },
@@ -982,94 +975,166 @@ private fun SniffedLinkItem(
     }
 }
 
-// ==================== WebView ====================
+// ==================== WebView（多实例管理）====================
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun CatCatchWebView(
-    url: String,
+    tabs: List<Tab>,
+    activeTabId: String,
     snifferScript: String,
-    viewModel: BrowserViewModel,
-    onWebViewCreated: (WebView) -> Unit,
-    onWebViewDisposed: () -> Unit
+    viewModel: BrowserViewModel
 ) {
+    val webViews = remember { mutableMapOf<String, WebView>() }
+    val context = LocalContext.current
+
+    // 注册 JS 执行和导航回调
+    SideEffect {
+        viewModel.registerJsExecutor { script ->
+            webViews[activeTabId]?.evaluateJavascript(script, null)
+        }
+        viewModel.registerWebviewAction { action ->
+            when (action) {
+                "back" -> webViews[activeTabId]?.goBack()
+                "forward" -> webViews[activeTabId]?.goForward()
+            }
+        }
+    }
+
+    // 为活跃标签加载 URL
+    val currentTab = tabs.find { it.id == activeTabId }
+    LaunchedEffect(activeTabId, currentTab?.url) {
+        val webView = webViews[activeTabId] ?: return@LaunchedEffect
+        val tab = currentTab ?: return@LaunchedEffect
+        if (tab.url.isNotEmpty() && webView.url != tab.url) {
+            webView.loadUrl(tab.url)
+        }
+    }
+
+    // 容器 + 子视图管理（update 回调有容器直接引用，适合增删子视图）
     AndroidView(
-        factory = { context ->
-            WebView(context).apply {
-                settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    allowFileAccess = false
-                    allowContentAccess = false
-                    setSupportZoom(true)
-                    builtInZoomControls = true
-                    displayZoomControls = false
-                }
-
-                addJavascriptInterface(
-                    SnifferBridge(
-                        onM3u8Found = { m3u8Url, headers ->
-                            viewModel.onM3u8Sniffed(m3u8Url, headers, SniffSource.DOM)
-                        },
-                        onLog = { message -> viewModel.addLog("[JS] $message") },
-                        onTitle = { title -> viewModel.onPageTitleChanged(title) }
-                    ),
-                    SnifferBridge.BRIDGE_NAME
+        factory = { ctx ->
+            android.widget.FrameLayout(ctx).apply {
+                layoutParams = android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
                 )
-
-                webViewClient = object : WebViewClient() {
-                    override fun shouldInterceptRequest(
-                        view: WebView, request: WebResourceRequest
-                    ): WebResourceResponse? {
-                        if (request.url.toString().contains(".m3u8", ignoreCase = true)) {
-                            viewModel.onNetworkM3u8Sniffed(request.url.toString())
-                        }
-                        return super.shouldInterceptRequest(view, request)
-                    }
-
-                    override fun shouldOverrideUrlLoading(
-                        view: WebView, request: WebResourceRequest
-                    ): Boolean {
-                        val requestUrl = request.url.toString()
-                        if (SiteConfigs.isAdUrl(requestUrl)) {
-                            viewModel.addLog("拦截广告: ${requestUrl.take(50)}...")
-                            return true
-                        }
-                        return false
-                    }
-
-                    override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                        super.onPageStarted(view, url, favicon)
-                        url?.let { viewModel.onPageStarted(it) }
-                    }
-
-                    override fun onPageFinished(view: WebView, url: String?) {
-                        super.onPageFinished(view, url)
-                        url?.let { viewModel.onPageFinished(it) }
-                        viewModel.updateNavigationState(view.canGoBack(), view.canGoForward())
-                        view.title?.let { viewModel.onPageTitleChanged(it) }
-                        if (snifferScript.isNotEmpty()) {
-                            view.evaluateJavascript(snifferScript, null)
-                        }
-                    }
-                }
-
-                onWebViewCreated(this)
-
-                if (url.isNotEmpty()) {
-                    loadUrl(url)
-                }
             }
         },
         modifier = Modifier.fillMaxSize(),
-        update = { view ->
-            if (url.isNotEmpty() && view.url != url) {
-                view.loadUrl(url)
+        update = { container ->
+            val tabIds = tabs.map { it.id }.toSet()
+
+            // 创建有 URL 的标签的 WebView（空标签不创建，避免 MIUI 拦截器崩溃）
+            for (tab in tabs) {
+                if (tab.id !in webViews && tab.url.isNotEmpty()) {
+                    val webView = createWebView(context, tab.id, snifferScript, viewModel)
+                    webViews[tab.id] = webView
+                    container.addView(webView)
+                }
             }
-        },
-        onReset = { view ->
-            view.destroy()
-            onWebViewDisposed()
+
+            // 切换可见性：activeTab 可见，其他隐藏
+            for ((id, view) in webViews) {
+                view.visibility = if (id == activeTabId) android.view.View.VISIBLE else android.view.View.GONE
+            }
+            // 将活跃标签置于最前
+            webViews[activeTabId]?.let { container.bringChildToFront(it) }
+
+            // 销毁已关闭标签的 WebView
+            val toRemove = webViews.keys.filter { it !in tabIds }
+            for (id in toRemove) {
+                webViews[id]?.let { webView ->
+                    container.removeView(webView)
+                    webView.destroy()
+                }
+                webViews.remove(id)
+            }
         }
     )
+
+    // Composable 销毁时清理
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.registerJsExecutor(null)
+            viewModel.registerWebviewAction(null)
+            webViews.values.forEach { webView ->
+                try {
+                    webView.webViewClient = WebViewClient()
+                    (webView.parent as? android.widget.FrameLayout)?.removeView(webView)
+                    webView.stopLoading()
+                    webView.removeAllViews()
+                    webView.destroy()
+                } catch (_: Exception) {}
+            }
+            webViews.clear()
+        }
+    }
+}
+
+private fun createWebView(
+    context: android.content.Context,
+    tabId: String,
+    snifferScript: String,
+    viewModel: BrowserViewModel
+): WebView {
+    return WebView(context).apply {
+        settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+            setSupportZoom(true)
+            builtInZoomControls = true
+            displayZoomControls = false
+        }
+
+        addJavascriptInterface(
+            SnifferBridge(
+                m3u8FoundCallback = { m3u8Url, headers ->
+                    viewModel.onM3u8Sniffed(m3u8Url, headers, SniffSource.DOM, tabId)
+                },
+                logCallback = { message -> viewModel.addLog("[JS] $message") },
+                titleCallback = { title -> viewModel.onPageTitleChanged(title, tabId) }
+            ),
+            SnifferBridge.BRIDGE_NAME
+        )
+
+        webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView, request: WebResourceRequest
+            ): WebResourceResponse? {
+                if (request.url.toString().contains(".m3u8", ignoreCase = true)) {
+                    viewModel.onNetworkM3u8Sniffed(request.url.toString(), tabId)
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+
+            override fun shouldOverrideUrlLoading(
+                view: WebView, request: WebResourceRequest
+            ): Boolean {
+                val requestUrl = request.url.toString()
+                if (SiteConfigs.isAdUrl(requestUrl)) {
+                    viewModel.addLog("拦截广告: ${requestUrl.take(50)}...")
+                    return true
+                }
+                return false
+            }
+
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                url?.let { viewModel.onPageStarted(it, tabId) }
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                super.onPageFinished(view, url)
+                url?.let { viewModel.onPageFinished(it, tabId) }
+                viewModel.updateNavigationState(view.canGoBack(), view.canGoForward(), tabId)
+                view.title?.let { viewModel.onPageTitleChanged(it, tabId) }
+                if (snifferScript.isNotEmpty()) {
+                    view.evaluateJavascript(snifferScript, null)
+                }
+            }
+        }
+    }
 }

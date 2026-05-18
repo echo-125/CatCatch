@@ -23,6 +23,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -33,8 +34,7 @@ import javax.inject.Inject
  */
 enum class BrowserMode {
     NEW_TAB,      // 新标签页
-    BROWSING,     // 网页浏览
-    TAB_MANAGER   // 标签管理器
+    BROWSING      // 网页浏览
 }
 
 /**
@@ -57,7 +57,6 @@ data class BrowserState(
     val isTabManagerOpen: Boolean = false,
     val isSnifferPanelOpen: Boolean = false,
     val sniffMode: SniffMode = SniffMode.AUTO,
-    val sniffedLinks: List<SniffedLink> = emptyList(),
     val siteConfig: SiteConfig? = null,
     val logs: List<String> = emptyList(),
     val success: String? = null,
@@ -110,6 +109,12 @@ data class BrowserState(
      */
     val isCurrentTabFavorite: Boolean
         get() = activeTab?.isFavorite ?: false
+
+    /**
+     * 当前标签的嗅探结果
+     */
+    val activeTabSniffedLinks: List<SniffedLink>
+        get() = activeTab?.sniffedLinks ?: emptyList()
 }
 
 /**
@@ -132,7 +137,37 @@ class BrowserViewModel @Inject constructor(
 
     private val m3u8Parser = M3U8Parser(okHttpClient)
     private var currentDownloadDir = AppPreferences.DEFAULT_DOWNLOAD_DIR
-    private val capturedUrls = mutableSetOf<String>()
+    private val capturedUrls = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+
+    private fun getCapturedUrls(tabId: String?): MutableSet<String> {
+        val id = tabId ?: _state.value.activeTabId ?: return mutableSetOf()
+        return capturedUrls.getOrPut(id) { java.util.Collections.synchronizedSet(mutableSetOf()) }
+    }
+    private var jsExecutor: ((String) -> Unit)? = null
+    private var webviewAction: ((String) -> Unit)? = null
+
+    /**
+     * 注册 JS 执行回调，由 Composable 层在 WebView 创建时调用
+     */
+    fun registerJsExecutor(executor: ((String) -> Unit)?) {
+        jsExecutor = executor
+    }
+
+    /**
+     * 注册 WebView 操作回调，由 Composable 层提供对活跃标签 WebView 的操作能力
+     * action: "back" | "forward"
+     */
+    fun registerWebviewAction(action: ((String) -> Unit)?) {
+        webviewAction = action
+    }
+
+    fun goBack() {
+        webviewAction?.invoke("back")
+    }
+
+    fun goForward() {
+        webviewAction?.invoke("forward")
+    }
 
     init {
         // 加载快捷方式
@@ -145,6 +180,37 @@ class BrowserViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.downloadDir.collect { dir ->
                 currentDownloadDir = dir
+            }
+        }
+        // 恢复标签页（仅启动时恢复一次，避免保存后重复恢复覆盖运行时状态）
+        viewModelScope.launch {
+            val json = settingsRepository.browserTabs.firstOrNull()
+            if (json != null) {
+                val restored = deserializeTabs(json)
+                if (restored != null) {
+                    _state.update {
+                        it.copy(
+                            tabs = restored.first,
+                            activeTabId = restored.second,
+                            mode = if (restored.first.find { t -> t.id == restored.second }?.isNewTab != false) {
+                                BrowserMode.NEW_TAB
+                            } else {
+                                BrowserMode.BROWSING
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        // 标签页变化时自动持久化
+        var lastSavedTabsJson: String? = null
+        viewModelScope.launch {
+            _state.collect { state ->
+                val json = serializeTabs(state.tabs, state.activeTabId)
+                if (json != lastSavedTabsJson) {
+                    lastSavedTabsJson = json
+                    settingsRepository.setBrowserTabs(json)
+                }
             }
         }
     }
@@ -171,8 +237,8 @@ class BrowserViewModel @Inject constructor(
     fun closeTab(tabId: String) {
         _state.update { state ->
             val newTabs = state.tabs.filter { it.id != tabId }
+            val isActiveTab = tabId == state.activeTabId
 
-            // 如果没有标签了，创建一个新的
             if (newTabs.isEmpty()) {
                 val newTab = Tab()
                 state.copy(
@@ -182,8 +248,7 @@ class BrowserViewModel @Inject constructor(
                     isTabManagerOpen = false
                 )
             } else {
-                // 如果关闭的是当前标签，切换到相邻标签
-                val newActiveTabId = if (tabId == state.activeTabId) {
+                val newActiveTabId = if (isActiveTab) {
                     val index = state.tabs.indexOfFirst { it.id == tabId }
                     val newIndex = if (index > 0) index - 1 else 0
                     newTabs[newIndex].id
@@ -194,15 +259,22 @@ class BrowserViewModel @Inject constructor(
                 state.copy(
                     tabs = newTabs,
                     activeTabId = newActiveTabId,
-                    mode = if (newTabs.find { it.id == newActiveTabId }?.isNewTab == true) {
-                        BrowserMode.NEW_TAB
+                    mode = if (isActiveTab) {
+                        if (newTabs.find { it.id == newActiveTabId }?.isNewTab == true) {
+                            BrowserMode.NEW_TAB
+                        } else {
+                            BrowserMode.BROWSING
+                        }
                     } else {
-                        BrowserMode.BROWSING
+                        state.mode
                     },
-                    isTabManagerOpen = false
+                    // 关闭活跃标签时自动关闭标签管理器；关闭非活跃标签时保持打开
+                    isTabManagerOpen = if (isActiveTab) false else state.isTabManagerOpen
                 )
             }
         }
+        // 清理已关闭标签的已捕获 URL
+        capturedUrls.remove(tabId)
     }
 
     /**
@@ -215,11 +287,9 @@ class BrowserViewModel @Inject constructor(
                 activeTabId = tabId,
                 mode = if (tab.isNewTab) BrowserMode.NEW_TAB else BrowserMode.BROWSING,
                 isTabManagerOpen = false,
-                sniffedLinks = emptyList()
+                isSnifferPanelOpen = false
             )
         }
-        // 清空已捕获的 URL
-        capturedUrls.clear()
     }
 
     /**
@@ -242,19 +312,6 @@ class BrowserViewModel @Inject constructor(
 
     // ==================== URL 和导航 ====================
 
-    fun onUrlChange(url: String) {
-        _state.update { state ->
-            val updatedTabs = state.tabs.map { tab ->
-                if (tab.id == state.activeTabId) {
-                    tab.copy(url = url)
-                } else {
-                    tab
-                }
-            }
-            state.copy(tabs = updatedTabs)
-        }
-    }
-
     fun loadUrl(url: String) {
         if (url.isBlank()) return
 
@@ -264,8 +321,8 @@ class BrowserViewModel @Inject constructor(
             url
         }
 
-        // 清空之前的状态
-        capturedUrls.clear()
+        // 清空当前标签的已捕获 URL
+        getCapturedUrls(_state.value.activeTabId).clear()
 
         _state.update { state ->
             val updatedTabs = state.tabs.map { tab ->
@@ -282,7 +339,6 @@ class BrowserViewModel @Inject constructor(
             state.copy(
                 tabs = updatedTabs,
                 mode = BrowserMode.BROWSING,
-                sniffedLinks = emptyList(),
                 logs = emptyList(),
                 siteConfig = SiteConfigs.getConfig(finalUrl)
             )
@@ -303,8 +359,7 @@ class BrowserViewModel @Inject constructor(
             }
             state.copy(
                 tabs = updatedTabs,
-                mode = BrowserMode.NEW_TAB,
-                sniffedLinks = emptyList()
+                mode = BrowserMode.NEW_TAB
             )
         }
     }
@@ -351,33 +406,34 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    fun onPageStarted(url: String) {
-        updateActiveTab { it.copy(isLoading = true) }
+    fun onPageStarted(url: String, tabId: String? = null) {
+        updateActiveTab(tabId) { it.copy(isLoading = true) }
     }
 
-    fun onPageFinished(url: String) {
-        updateActiveTab { it.copy(isLoading = false, url = url) }
+    fun onPageFinished(url: String, tabId: String? = null) {
+        updateActiveTab(tabId) { it.copy(isLoading = false, url = url) }
         // 同步数据库中的收藏状态
         viewModelScope.launch {
             val isFav = shortcutDao.existsByUrl(url)
-            updateActiveTab { it.copy(isFavorite = isFav) }
+            updateActiveTab(tabId) { it.copy(isFavorite = isFav) }
         }
     }
 
-    fun updateNavigationState(canGoBack: Boolean, canGoForward: Boolean) {
-        updateActiveTab { it.copy(canGoBack = canGoBack, canGoForward = canGoForward) }
+    fun updateNavigationState(canGoBack: Boolean, canGoForward: Boolean, tabId: String? = null) {
+        updateActiveTab(tabId) { it.copy(canGoBack = canGoBack, canGoForward = canGoForward) }
     }
 
-    fun onPageTitleChanged(title: String) {
+    fun onPageTitleChanged(title: String, tabId: String? = null) {
         if (title.isNotBlank()) {
-            updateActiveTab { it.copy(title = title) }
+            updateActiveTab(tabId) { it.copy(title = title) }
         }
     }
 
-    private fun updateActiveTab(transform: (Tab) -> Tab) {
+    private fun updateActiveTab(tabId: String? = null, transform: (Tab) -> Tab) {
         _state.update { state ->
+            val targetId = tabId ?: state.activeTabId
             val updatedTabs = state.tabs.map { tab ->
-                if (tab.id == state.activeTabId) {
+                if (tab.id == targetId) {
                     transform(tab)
                 } else {
                     tab
@@ -389,28 +445,30 @@ class BrowserViewModel @Inject constructor(
 
     // ==================== 嗅探处理 ====================
 
-    fun onM3u8Sniffed(url: String, headers: Map<String, String>, source: SniffSource = SniffSource.DOM) {
-        if (url.isBlank() || url in capturedUrls) return
-        capturedUrls.add(url)
+    fun onM3u8Sniffed(url: String, headers: Map<String, String>, source: SniffSource = SniffSource.DOM, tabId: String? = null) {
+        val captured = getCapturedUrls(tabId)
+        if (url.isBlank() || url in captured) return
+        captured.add(url)
 
         viewModelScope.launch {
             try {
-                parseM3u8Link(url, null, headers, source)
+                parseM3u8Link(url, null, headers, source, tabId)
             } catch (e: Exception) {
                 addLog("解析失败: ${e.message}")
             }
         }
     }
 
-    fun onNetworkM3u8Sniffed(url: String) {
-        if (url.isBlank() || url in capturedUrls) return
-        capturedUrls.add(url)
+    fun onNetworkM3u8Sniffed(url: String, tabId: String? = null) {
+        val captured = getCapturedUrls(tabId)
+        if (url.isBlank() || url in captured) return
+        captured.add(url)
 
         val headers = extractHeadersFromUrl(url)
 
         viewModelScope.launch {
             try {
-                parseM3u8Link(url, null, headers, SniffSource.NETWORK)
+                parseM3u8Link(url, null, headers, SniffSource.NETWORK, tabId)
             } catch (e: Exception) {
                 addLog("解析失败: ${e.message}")
             }
@@ -421,7 +479,8 @@ class BrowserViewModel @Inject constructor(
         url: String,
         content: String?,
         headers: Map<String, String>,
-        source: SniffSource
+        source: SniffSource,
+        tabId: String? = null
     ) {
         addLog("开始解析: ${url.substringAfterLast('/')}")
 
@@ -437,7 +496,7 @@ class BrowserViewModel @Inject constructor(
                 source = source
             )
 
-            addSniffedLink(link)
+            addSniffedLink(link, tabId)
             addLog("解析成功: ${formatDuration(link.duration)}")
 
         } catch (e: Exception) {
@@ -453,7 +512,7 @@ class BrowserViewModel @Inject constructor(
                         isPlaylist = true,
                         source = source
                     )
-                    addSniffedLink(link)
+                    addSniffedLink(link, tabId)
                     addLog("发现播放列表: ${variants.size} 个分辨率")
                 } else if (fetchedContent != null && fetchedContent.contains("#EXTM3U")) {
                     val duration = parseDurationFromContent(fetchedContent)
@@ -464,7 +523,7 @@ class BrowserViewModel @Inject constructor(
                         duration = duration,
                         source = source
                     )
-                    addSniffedLink(link)
+                    addSniffedLink(link, tabId)
                     addLog("解析成功: ${formatDuration(duration)}")
                 } else {
                     addLog("非 M3U8 内容，跳过")
@@ -475,15 +534,16 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    private fun addSniffedLink(link: SniffedLink) {
-        _state.update {
-            it.copy(sniffedLinks = it.sniffedLinks + link)
+    private fun addSniffedLink(link: SniffedLink, tabId: String? = null) {
+        updateActiveTab(tabId) { tab ->
+            tab.copy(sniffedLinks = tab.sniffedLinks + link)
         }
     }
 
     // ==================== 深度扫描 ====================
 
     fun triggerDeepScan() {
+        jsExecutor?.invoke("CatCatchSniffer.deepScan()") ?: addLog("WebView 未就绪")
         addLog("触发深度扫描...")
     }
 
@@ -515,7 +575,7 @@ class BrowserViewModel @Inject constructor(
     }
 
     fun addTask(url: String) {
-        val link = _state.value.sniffedLinks.find { it.url == url }
+        val link = _state.value.activeTabSniffedLinks.find { it.url == url }
         if (link != null) {
             addTask(link)
         } else {
@@ -569,11 +629,11 @@ class BrowserViewModel @Inject constructor(
      * 选择指定链接的变体（分辨率）
      */
     fun selectVariant(linkUrl: String, variantIndex: Int) {
-        _state.update { state ->
-            val updatedLinks = state.sniffedLinks.map { link ->
+        updateActiveTab { tab ->
+            val updatedLinks = tab.sniffedLinks.map { link ->
                 if (link.url == linkUrl) link.copy(selectedVariantIndex = variantIndex) else link
             }
-            state.copy(sniffedLinks = updatedLinks)
+            tab.copy(sniffedLinks = updatedLinks)
         }
     }
 
@@ -581,7 +641,7 @@ class BrowserViewModel @Inject constructor(
      * 批量添加所有嗅探到的链接
      */
     fun addAllTasks() {
-        val links = _state.value.sniffedLinks
+        val links = _state.value.activeTabSniffedLinks
         if (links.isEmpty()) return
 
         viewModelScope.launch {
@@ -612,10 +672,8 @@ class BrowserViewModel @Inject constructor(
     }
 
     fun clearSniffedLinks() {
-        capturedUrls.clear()
-        _state.update {
-            it.copy(sniffedLinks = emptyList())
-        }
+        getCapturedUrls(_state.value.activeTabId).clear()
+        updateActiveTab { it.copy(sniffedLinks = emptyList()) }
     }
 
     fun addLog(message: String) {
@@ -741,6 +799,51 @@ class BrowserViewModel @Inject constructor(
             }
         }
         return totalDuration
+    }
+
+    // ==================== 标签页序列化 ====================
+
+    private fun serializeTabs(tabs: List<Tab>, activeTabId: String): String {
+        val root = org.json.JSONObject()
+        val arr = org.json.JSONArray()
+        for (tab in tabs) {
+            // 仅持久化有 URL 的标签，跳过空新标签页
+            if (tab.url.isEmpty()) continue
+            val obj = org.json.JSONObject()
+            obj.put("id", tab.id)
+            obj.put("url", tab.url)
+            obj.put("title", tab.title)
+            obj.put("isFavorite", tab.isFavorite)
+            arr.put(obj)
+        }
+        root.put("tabs", arr)
+        root.put("activeTabId", activeTabId)
+        return root.toString()
+    }
+
+    private fun deserializeTabs(json: String): Pair<List<Tab>, String>? {
+        return try {
+            val root = org.json.JSONObject(json)
+            val arr = root.getJSONArray("tabs")
+            val activeTabId = root.optString("activeTabId", "")
+            val tabs = mutableListOf<Tab>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                tabs.add(
+                    Tab(
+                        id = obj.getString("id"),
+                        url = obj.getString("url"),
+                        title = obj.optString("title", ""),
+                        isFavorite = obj.optBoolean("isFavorite", false)
+                    )
+                )
+            }
+            if (tabs.isEmpty()) return null
+            val validActiveId = if (tabs.any { it.id == activeTabId }) activeTabId else tabs.first().id
+            Pair(tabs, validActiveId)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     companion object {

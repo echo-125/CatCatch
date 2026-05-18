@@ -8,39 +8,28 @@ import org.json.JSONObject
  * 注入到 WebView 中，供 JS 脚本调用
  */
 class SnifferBridge(
-    private val onM3u8Found: (url: String, headers: Map<String, String>) -> Unit,
-    private val onLog: (message: String) -> Unit,
-    private val onTitle: (title: String) -> Unit
+    private val m3u8FoundCallback: (url: String, headers: Map<String, String>) -> Unit,
+    private val logCallback: (message: String) -> Unit,
+    private val titleCallback: (title: String) -> Unit
 ) {
     companion object {
         const val BRIDGE_NAME = "Android"
     }
 
-    /**
-     * JS 发现 M3U8 链接
-     * @param url M3U8 URL
-     * @param headersJson JSON 格式的请求头
-     */
     @JavascriptInterface
     fun onM3u8Found(url: String, headersJson: String) {
         val headers = parseHeadersJson(headersJson)
-        onM3u8Found(url, headers)
+        m3u8FoundCallback(url, headers)
     }
 
-    /**
-     * JS 日志
-     */
     @JavascriptInterface
     fun onLog(message: String) {
-        onLog(message)
+        logCallback(message)
     }
 
-    /**
-     * JS 返回页面标题
-     */
     @JavascriptInterface
     fun onTitle(title: String) {
-        onTitle(title)
+        titleCallback(title)
     }
 
     private fun parseHeadersJson(json: String): Map<String, String> {

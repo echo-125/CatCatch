@@ -45,6 +45,10 @@ class SettingsRepository(
         it[AppPreferences.SILENT_MODE] ?: AppPreferences.DEFAULT_SILENT_MODE
     }
 
+    val browserTabs: Flow<String?> = dataStore.data.map {
+        it[AppPreferences.BROWSER_TABS]
+    }
+
     suspend fun setDownloadDir(value: String) {
         dataStore.edit { it[AppPreferences.DOWNLOAD_DIR] = value }
     }
@@ -81,5 +85,15 @@ class SettingsRepository(
 
     suspend fun setSilentMode(value: Boolean) {
         dataStore.edit { it[AppPreferences.SILENT_MODE] = value }
+    }
+
+    suspend fun setBrowserTabs(value: String?) {
+        dataStore.edit {
+            if (value != null) {
+                it[AppPreferences.BROWSER_TABS] = value
+            } else {
+                it.remove(AppPreferences.BROWSER_TABS)
+            }
+        }
     }
 }

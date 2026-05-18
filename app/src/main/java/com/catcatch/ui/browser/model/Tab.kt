@@ -12,7 +12,8 @@ data class Tab(
     val isLoading: Boolean = false,
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val sniffedLinks: List<SniffedLink> = emptyList()
 ) {
     /**
      * 是否是新标签页（URL 为空）
