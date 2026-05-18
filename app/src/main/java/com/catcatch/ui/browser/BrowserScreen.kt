@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -43,9 +44,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
 import coil.compose.AsyncImage
 import androidx.compose.material3.Card
@@ -256,7 +258,7 @@ fun BrowserScreen(
                 }
             ) {
                 Icon(
-                    Icons.Default.FileDownload,
+                    Icons.Default.Search,
                     contentDescription = "嗅探",
                     tint = if (state.sniffedLinks.isNotEmpty()) {
                         MaterialTheme.colorScheme.onPrimary
@@ -431,16 +433,16 @@ private fun AddressBar(
             .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 标签管理按钮（最左侧，带黑色边框，缩小）
+        // 标签管理按钮（最左侧，圆形，带黑色边框）
         Box(
             modifier = Modifier
                 .size(tabButtonSize)
-                .clip(RoundedCornerShape(6.dp))
+                .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surface)
                 .border(
                     width = 1.5.dp,
                     color = Color.Black,
-                    shape = RoundedCornerShape(6.dp)
+                    shape = CircleShape
                 )
                 .clickable { onTabManager() },
             contentAlignment = Alignment.Center
