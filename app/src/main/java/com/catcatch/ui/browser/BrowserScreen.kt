@@ -186,27 +186,52 @@ fun BrowserScreen(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
-            // 嗅探结果提示条
-            if (state.activeTabSniffedLinks.isNotEmpty()) {
+            // 嗅探结果提示条（动态显示进度）
+            if (state.isSniffing || state.activeTabSniffedLinks.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.primaryContainer)
-                        .clickable { viewModel.toggleSnifferPanel() }
+                        .background(
+                            if (state.isSniffing) MaterialTheme.colorScheme.tertiaryContainer
+                            else MaterialTheme.colorScheme.primaryContainer
+                        )
+                        .clickable(enabled = state.activeTabSniffedLinks.isNotEmpty()) {
+                            viewModel.toggleSnifferPanel()
+                        }
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        "发现 ${state.activeTabSniffedLinks.size} 个 M3U8 链接",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        "点击查看详情",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (state.isSniffing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(
+                            text = if (state.isSniffing) {
+                                state.sniffProgress.ifEmpty { "正在嗅探..." }
+                            } else {
+                                "发现 ${state.activeTabSniffedLinks.size} 个 M3U8 链接"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (state.isSniffing) {
+                                MaterialTheme.colorScheme.onTertiaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            }
+                        )
+                    }
+                    if (state.activeTabSniffedLinks.isNotEmpty()) {
+                        Text(
+                            "点击查看详情",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        )
+                    }
                 }
             }
 
@@ -245,28 +270,31 @@ fun BrowserScreen(
             contentAlignment = Alignment.BottomEnd
         ) {
             FloatingActionButton(
-                onClick = {
-                    if (state.activeTabSniffedLinks.isNotEmpty()) {
-                        viewModel.toggleSnifferPanel()
-                    } else {
-                        viewModel.triggerDeepScan()
-                    }
-                },
-                containerColor = if (state.activeTabSniffedLinks.isNotEmpty()) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
+                onClick = { viewModel.toggleSnifferPanel() },  // 始终打开面板
+                containerColor = when {
+                    state.isSniffing -> MaterialTheme.colorScheme.tertiary
+                    state.activeTabSniffedLinks.isNotEmpty() -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.surfaceVariant
                 }
             ) {
-                Icon(
-                    Icons.Default.Search,
-                    contentDescription = "嗅探",
-                    tint = if (state.activeTabSniffedLinks.isNotEmpty()) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
+                if (state.isSniffing) {
+                    // 嗅探中：显示旋转动画
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onTertiary
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = "嗅探",
+                        tint = if (state.activeTabSniffedLinks.isNotEmpty()) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
             }
         }
 
@@ -373,7 +401,8 @@ fun BrowserScreen(
                         onBookmarkClick = { url -> viewModel.loadBookmark(url) },
                         onBookmarkDelete = { id -> viewModel.removeBookmarkById(id) },
                         onBookmarksDelete = { ids -> viewModel.deleteSelectedBookmarks(ids) },
-                        onBookmarkAdd = { title, url -> viewModel.addBookmark(title, url) }
+                        onBookmarkAdd = { title, url -> viewModel.addBookmark(title, url) },
+                        onBookmarkSniffModeChange = { id, mode -> viewModel.updateBookmarkSniffMode(id, mode) }
                     )
                 }
             }
@@ -399,9 +428,13 @@ fun BrowserScreen(
                     SnifferPanelContent(
                         links = state.activeTabSniffedLinks,
                         sniffMode = state.sniffMode,
+                        isSniffing = state.isSniffing,
                         onSelectVariant = { url, index -> viewModel.selectVariant(url, index) },
                         onAddTask = { link -> viewModel.addTask(link) },
-                        onSniffModeChange = { mode -> viewModel.setSniffMode(mode) }
+                        onSniffModeChange = { mode -> viewModel.setSniffMode(mode) },
+                        onReSniff = { viewModel.reSniff() },
+                        onStopSniffing = { viewModel.stopSniffing() },
+                        onSaveAsDomainDefault = { mode -> viewModel.setSniffMode(mode, persistForDomain = true) }
                     )
                 },
                 confirmButton = {
@@ -766,7 +799,8 @@ private fun BookmarkManagerPanel(
     onBookmarkClick: (String) -> Unit,
     onBookmarkDelete: (Long) -> Unit,
     onBookmarksDelete: (Set<Long>) -> Unit,
-    onBookmarkAdd: (String, String) -> Unit
+    onBookmarkAdd: (String, String) -> Unit,
+    onBookmarkSniffModeChange: (Long, SniffMode?) -> Unit
 ) {
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<Long>()) }
@@ -898,7 +932,8 @@ private fun BookmarkManagerPanel(
                                 onBookmarkClick(bookmark.url)
                             }
                         },
-                        onDelete = { onBookmarkDelete(bookmark.id) }
+                        onDelete = { onBookmarkDelete(bookmark.id) },
+                        onSniffModeChange = onBookmarkSniffModeChange
                     )
                 }
             }
@@ -1012,7 +1047,8 @@ private fun BookmarkItem(
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onSniffModeChange: (Long, SniffMode?) -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -1098,6 +1134,47 @@ private fun BookmarkItem(
             )
         }
 
+        // 嗅探模式选择下拉菜单
+        if (!isSelectionMode) {
+            var sniffModeDropdownExpanded by remember { mutableStateOf(false) }
+            Box {
+                AssistChip(
+                    onClick = { sniffModeDropdownExpanded = true },
+                    label = {
+                        Text(
+                            if (bookmark.sniffMode.isNotEmpty()) {
+                                try { SniffMode.valueOf(bookmark.sniffMode).label } catch (_: Exception) { "默认" }
+                            } else "默认",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                )
+                DropdownMenu(
+                    expanded = sniffModeDropdownExpanded,
+                    onDismissRequest = { sniffModeDropdownExpanded = false }
+                ) {
+                    // 默认选项（清除绑定，使用默认 AUTO）
+                    DropdownMenuItem(
+                        text = { Text("默认") },
+                        onClick = {
+                            onSniffModeChange(bookmark.id, null)
+                            sniffModeDropdownExpanded = false
+                        }
+                    )
+                    // 各种嗅探模式
+                    SniffMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(mode.label) },
+                            onClick = {
+                                onSniffModeChange(bookmark.id, mode)
+                                sniffModeDropdownExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
         // 删除按钮（非选择模式时显示）
         if (!isSelectionMode) {
             IconButton(
@@ -1177,14 +1254,18 @@ private fun TabItem(
 private fun SnifferPanelContent(
     links: List<com.catcatch.ui.browser.model.SniffedLink>,
     sniffMode: SniffMode,
+    isSniffing: Boolean,
     onSelectVariant: (String, Int) -> Unit,
     onAddTask: (com.catcatch.ui.browser.model.SniffedLink) -> Unit,
-    onSniffModeChange: (SniffMode) -> Unit
+    onSniffModeChange: (SniffMode) -> Unit,
+    onReSniff: () -> Unit,
+    onStopSniffing: () -> Unit,
+    onSaveAsDomainDefault: (SniffMode) -> Unit
 ) {
     var modeDropdownExpanded by remember { mutableStateOf(false) }
 
     Column {
-        // 嗅探模式切换
+        // 嗅探模式切换 + 重新嗅探按钮
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1195,32 +1276,67 @@ private fun SnifferPanelContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Box {
-                AssistChip(
-                    onClick = { modeDropdownExpanded = true },
-                    label = { Text(sniffMode.label) },
-                    trailingIcon = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 重新嗅探按钮（文字按钮）
+                TextButton(
+                    onClick = if (isSniffing) onStopSniffing else onReSniff
+                ) {
+                    if (isSniffing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("停止嗅探", style = MaterialTheme.typography.bodySmall)
+                    } else {
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp)
                         )
-                    }
-                )
-                DropdownMenu(
-                    expanded = modeDropdownExpanded,
-                    onDismissRequest = { modeDropdownExpanded = false }
-                ) {
-                    SniffMode.entries.forEach { mode ->
-                        DropdownMenuItem(
-                            text = { Text(mode.label) },
-                            onClick = {
-                                onSniffModeChange(mode)
-                                modeDropdownExpanded = false
-                            }
-                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("重新嗅探", style = MaterialTheme.typography.bodySmall)
                     }
                 }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // 模式切换
+                Box {
+                    AssistChip(
+                        onClick = { modeDropdownExpanded = true },
+                        label = { Text(sniffMode.label) }
+                    )
+                    DropdownMenu(
+                        expanded = modeDropdownExpanded,
+                        onDismissRequest = { modeDropdownExpanded = false }
+                    ) {
+                        SniffMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(mode.label) },
+                                onClick = {
+                                    onSniffModeChange(mode)
+                                    modeDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 保存为站点默认按钮
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(
+                onClick = { onSaveAsDomainDefault(sniffMode) },
+                enabled = !isSniffing
+            ) {
+                Icon(Icons.Default.Bookmark, null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("保存为站点默认", style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -1245,6 +1361,29 @@ private fun SnifferPanelContent(
                     onSelectVariant = { index -> onSelectVariant(link.url, index) },
                     onAdd = { onAddTask(link) }
                 )
+            }
+        }
+
+        // 空状态显示
+        if (links.isEmpty() && !isSniffing) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                "未发现 M3U8 链接",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                TextButton(onClick = onReSniff) {
+                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("重新嗅探")
+                }
             }
         }
     }
@@ -1287,6 +1426,7 @@ private fun SniffedLinkItem(
                     com.catcatch.ui.browser.model.SniffSource.NETWORK -> MaterialTheme.colorScheme.tertiary
                     com.catcatch.ui.browser.model.SniffSource.DOM -> MaterialTheme.colorScheme.primary
                     com.catcatch.ui.browser.model.SniffSource.DEEP_SCAN -> MaterialTheme.colorScheme.secondary
+                    com.catcatch.ui.browser.model.SniffSource.PLAYER -> MaterialTheme.colorScheme.tertiaryContainer
                 }
                 Box(
                     modifier = Modifier
@@ -1304,14 +1444,23 @@ private fun SniffedLinkItem(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // 第二行：时长 + 变体信息
+            // 第二行：时长 + 文件大小 + 编码 + 变体信息
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (link.duration > 0) {
+                // 新增: 估算文件大小或时长
+                if (link.estimatedSizeText != "未知") {
                     Text(
-                        com.catcatch.ui.browser.model.formatDuration(link.duration),
+                        link.estimatedSizeText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // 新增: 编码格式
+                if (link.selectedCodecDisplay.isNotEmpty()) {
+                    Text(
+                        link.selectedCodecDisplay,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1362,7 +1511,7 @@ private fun SniffedLinkItem(
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        "${variant.resolutionText} · ${variant.metaText}",
+                                        "${variant.resolutionText} · ${variant.codecDisplay} · ${variant.metaText}",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 },
@@ -1420,6 +1569,7 @@ private fun CatCatchWebView(
             when (action) {
                 "back" -> webViews[activeTabId]?.goBack()
                 "forward" -> webViews[activeTabId]?.goForward()
+                "reload" -> webViews[activeTabId]?.reload()
             }
         }
     }
@@ -1583,6 +1733,15 @@ private fun createWebView(
                 view.title?.let { viewModel.onPageTitleChanged(it, tabId) }
                 if (snifferScript.isNotEmpty()) {
                     view.evaluateJavascript(snifferScript, null)
+                    // 根据当前嗅探模式选择性初始化
+                    val currentMode = viewModel.state.value.sniffMode
+                    val initScript = when (currentMode) {
+                        com.catcatch.ui.browser.SniffMode.AUTO -> "CatCatchSniffer.init()"
+                        com.catcatch.ui.browser.SniffMode.NETWORK -> "CatCatchSniffer.initNetworkOnly()"
+                        com.catcatch.ui.browser.SniffMode.DOM -> "CatCatchSniffer.initDomOnly()"
+                        com.catcatch.ui.browser.SniffMode.DEEP_SCAN -> "CatCatchSniffer.deepScan()"
+                    }
+                    view.evaluateJavascript(initScript, null)
                 }
             }
         }
