@@ -65,4 +65,16 @@ interface BookmarkDao {
      */
     @Query("UPDATE bookmarks SET faviconUrl = :faviconUrl WHERE id = :id")
     suspend fun updateFavicon(id: Long, faviconUrl: String): Int
+
+    /**
+     * 更新书签嗅探模式绑定
+     */
+    @Query("UPDATE bookmarks SET sniffMode = :sniffMode WHERE id = :id")
+    suspend fun updateSniffMode(id: Long, sniffMode: String): Int
+
+    /**
+     * 一次性获取所有书签（用于域名匹配）
+     */
+    @Query("SELECT * FROM bookmarks")
+    suspend fun getAllOnce(): List<BookmarkEntity>
 }

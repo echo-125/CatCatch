@@ -17,5 +17,6 @@ data class BookmarkEntity(
     val url: String,
     val title: String,
     val faviconUrl: String = "",
+    val sniffMode: String = "",  // 嗅探模式名称，空字符串表示使用默认 AUTO
     val createdAt: Long = System.currentTimeMillis()
 )
