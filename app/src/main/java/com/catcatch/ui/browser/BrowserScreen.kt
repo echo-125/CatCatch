@@ -472,6 +472,48 @@ fun BrowserScreen(
                 Text(message)
             }
         }
+
+        // 长按链接上下文菜单
+        state.linkContextMenuUrl?.let { url ->
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissLinkContextMenu() },
+                title = {
+                    Text(
+                        "链接操作",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                },
+                text = {
+                    Text(
+                        url,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.openLinkInNewTab(url) }) {
+                        Text("在新标签页中打开")
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("link", url))
+                            viewModel.dismissLinkContextMenu()
+                        }) {
+                            Text("复制链接")
+                        }
+                        TextButton(onClick = { viewModel.dismissLinkContextMenu() }) {
+                            Text("取消")
+                        }
+                    }
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
     }
 }
 
@@ -1673,6 +1715,19 @@ private fun createWebView(
             ),
             SnifferBridge.BRIDGE_NAME
         )
+
+        setOnLongClickListener {
+            val hitTestResult = hitTestResult
+            if (hitTestResult.type == WebView.HitTestResult.SRC_ANCHOR_TYPE ||
+                hitTestResult.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
+            ) {
+                val url = hitTestResult.extra
+                if (!url.isNullOrEmpty()) {
+                    viewModel.showLinkContextMenu(url)
+                    true
+                } else false
+            } else false
+        }
 
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(

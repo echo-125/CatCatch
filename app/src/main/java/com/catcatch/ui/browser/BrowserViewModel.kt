@@ -74,7 +74,8 @@ data class BrowserState(
     val sslStrictMode: Boolean = true,
     val logs: List<String> = emptyList(),
     val success: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val linkContextMenuUrl: String? = null
 ) {
     val activeTab: Tab?
         get() = tabs.find { it.id == activeTabId }
@@ -928,6 +929,22 @@ class BrowserViewModel @Inject constructor(
 
     fun clearError() {
         _state.update { it.copy(error = null) }
+    }
+
+    // ==================== 链接上下文菜单 ====================
+
+    fun showLinkContextMenu(url: String) {
+        _state.update { it.copy(linkContextMenuUrl = url) }
+    }
+
+    fun dismissLinkContextMenu() {
+        _state.update { it.copy(linkContextMenuUrl = null) }
+    }
+
+    fun openLinkInNewTab(url: String) {
+        dismissLinkContextMenu()
+        newTab()
+        loadUrl(url)
     }
 
     // ==================== 辅助函数 ====================
