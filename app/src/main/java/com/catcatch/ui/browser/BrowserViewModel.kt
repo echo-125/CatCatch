@@ -48,6 +48,17 @@ enum class SniffMode(val label: String) {
 }
 
 /**
+ * 嗅探状态
+ */
+enum class SniffState {
+    IDLE,       // 空闲，未嗅探
+    SCANNING,   // 正在嗅探中
+    FOUND,      // 已发现链接
+    EMPTY,      // 嗅探完成但未发现链接
+    ERROR       // 嗅探出错
+}
+
+/**
  * 浏览器状态
  */
 data class BrowserState(
@@ -90,6 +101,17 @@ data class BrowserState(
 
     val activeTabSniffedLinks: List<SniffedLink>
         get() = activeTab?.sniffedLinks ?: emptyList()
+
+    // 新增: 嗅探状态（从 activeTab 派生）
+    val sniffState: SniffState
+        get() = activeTab?.sniffState ?: SniffState.IDLE
+
+    val sniffProgress: String
+        get() = activeTab?.sniffProgress ?: ""
+
+    // 新增: 是否正在嗅探
+    val isSniffing: Boolean
+        get() = sniffState == SniffState.SCANNING
 }
 
 /**
@@ -428,6 +450,25 @@ class BrowserViewModel @Inject constructor(
                 siteConfig = SiteConfigs.getConfig(finalUrl)
             )
         }
+
+        // 查找域名对应的嗅探模式绑定
+        viewModelScope.launch {
+            val matchingBookmark = findBookmarkForDomain(finalUrl)
+            if (matchingBookmark != null && matchingBookmark.sniffMode.isNotEmpty()) {
+                val mode = try {
+                    SniffMode.valueOf(matchingBookmark.sniffMode)
+                } catch (_: Exception) {
+                    null
+                }
+                mode?.let {
+                    _state.update { state -> state.copy(sniffMode = it) }
+                    addLog("应用站点嗅探模式: ${it.label}")
+                }
+            } else {
+                // 重置为默认 AUTO
+                _state.update { state -> state.copy(sniffMode = SniffMode.AUTO) }
+            }
+        }
     }
 
     fun goHome() {
@@ -489,11 +530,18 @@ class BrowserViewModel @Inject constructor(
         if (url.isBlank() || url in captured) return
         captured.add(url)
 
+        // 设置嗅探状态为 SCANNING
+        updateActiveTab(tabId) { it.copy(sniffState = SniffState.SCANNING, sniffProgress = "正在解析链接...") }
+        // 启动超时检测
+        startSniffTimeoutCheck(tabId)
+
         viewModelScope.launch {
             try {
                 parseM3u8Link(url, null, headers, source, tabId)
+                updateSniffResultState(tabId)
             } catch (e: Exception) {
                 addLog("解析失败: ${e.message}")
+                updateSniffResultState(tabId)
             }
         }
     }
@@ -505,11 +553,18 @@ class BrowserViewModel @Inject constructor(
 
         val headers = extractHeadersFromUrl(url)
 
+        // 设置嗅探状态为 SCANNING
+        updateActiveTab(tabId) { it.copy(sniffState = SniffState.SCANNING, sniffProgress = "正在解析链接...") }
+        // 启动超时检测
+        startSniffTimeoutCheck(tabId)
+
         viewModelScope.launch {
             try {
                 parseM3u8Link(url, null, headers, SniffSource.NETWORK, tabId)
+                updateSniffResultState(tabId)
             } catch (e: Exception) {
                 addLog("解析失败: ${e.message}")
+                updateSniffResultState(tabId)
             }
         }
     }
@@ -523,20 +578,33 @@ class BrowserViewModel @Inject constructor(
     ) {
         addLog("开始解析: ${url.substringAfterLast('/')}")
 
+        // 获取当前嗅探结果数量，用于生成序号
+        val currentIndex = _state.value.activeTabSniffedLinks.size
+
         try {
             val result = m3u8Parser.parse(url, headers)
             val m3u8Data = result.getOrThrow()
 
+            // 尝试解析 variants 信息（从原始内容中）
+            val fetchedContent = content ?: fetchContent(url, headers)
+            val variants = if (fetchedContent != null && fetchedContent.contains("#EXT-X-STREAM-INF")) {
+                parseVariants(fetchedContent, url)
+            } else {
+                emptyList()
+            }
+
             val link = SniffedLink(
                 url = url,
-                fileName = generateFileName(url),
+                fileName = generateFileName(url, currentIndex),
                 headers = headers,
                 duration = m3u8Data.segments.sumOf { it.duration },
+                variants = variants,
+                isPlaylist = variants.isNotEmpty(),
                 source = source
             )
 
             addSniffedLink(link, tabId)
-            addLog("解析成功: ${formatDuration(link.duration)}")
+            addLog("解析成功: ${formatDuration(link.duration)}${if (variants.isNotEmpty()) "，${variants.size} 个分辨率" else ""}")
 
         } catch (e: Exception) {
             try {
@@ -545,7 +613,7 @@ class BrowserViewModel @Inject constructor(
                     val variants = parseVariants(fetchedContent, url)
                     val link = SniffedLink(
                         url = url,
-                        fileName = generateFileName(url),
+                        fileName = generateFileName(url, currentIndex),
                         headers = headers,
                         variants = variants,
                         isPlaylist = true,
@@ -557,7 +625,7 @@ class BrowserViewModel @Inject constructor(
                     val duration = parseDurationFromContent(fetchedContent)
                     val link = SniffedLink(
                         url = url,
-                        fileName = generateFileName(url),
+                        fileName = generateFileName(url, currentIndex),
                         headers = headers,
                         duration = duration,
                         source = source
@@ -654,8 +722,146 @@ class BrowserViewModel @Inject constructor(
         _state.update { it.copy(isSnifferPanelOpen = false) }
     }
 
-    fun setSniffMode(mode: SniffMode) {
+    fun setSniffMode(mode: SniffMode, persistForDomain: Boolean = false) {
         _state.update { it.copy(sniffMode = mode) }
+
+        // 如果需要持久化到域名
+        if (persistForDomain) {
+            val currentUrl = _state.value.currentUrl
+            if (currentUrl.isNotEmpty()) {
+                viewModelScope.launch {
+                    val bookmarks = bookmarkDao.getAllOnce()
+                    val matching = bookmarks.find { domainsMatch(it.url, currentUrl) }
+                    if (matching != null) {
+                        bookmarkDao.updateSniffMode(matching.id, mode.name)
+                        addLog("保存站点嗅探模式: ${mode.label}")
+                    }
+                }
+            }
+        }
+
+        // 清除旧的嗅探结果和去重集合
+        clearSniffedLinks()
+
+        // 重置嗅探状态
+        updateActiveTab { it.copy(sniffState = SniffState.SCANNING, sniffProgress = "正在嗅探...") }
+
+        // 启动超时检测
+        startSniffTimeoutCheck()
+
+        // 通知 JS 层清除状态
+        jsExecutor?.invoke("CatCatchSniffer.clearState()")
+
+        // 重新加载页面以应用新的嗅探模式
+        val currentUrl = _state.value.currentUrl
+        if (currentUrl.isNotEmpty()) {
+            webviewAction?.invoke("reload")
+            addLog("重新加载页面以应用新模式: ${currentUrl.take(50)}...")
+
+            // 延迟后重新初始化嗅探（等待页面加载完成）
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(3000) // 等待 3 秒
+                when (mode) {
+                    SniffMode.AUTO -> jsExecutor?.invoke("CatCatchSniffer.init()")
+                    SniffMode.NETWORK -> jsExecutor?.invoke("CatCatchSniffer.initNetworkOnly()")
+                    SniffMode.DOM -> jsExecutor?.invoke("CatCatchSniffer.initDomOnly()")
+                    SniffMode.DEEP_SCAN -> jsExecutor?.invoke("CatCatchSniffer.deepScan()")
+                }
+                addLog("重新初始化嗅探: ${mode.label}")
+            }
+        }
+
+        addLog("切换嗅探模式: ${mode.label}")
+    }
+
+    // 新增: 重新嗅探当前模式（清除旧结果，重新加载页面）
+    fun reSniff() {
+        // 清除旧结果
+        clearSniffedLinks()
+        // 通知 JS 层清除状态
+        jsExecutor?.invoke("CatCatchSniffer.clearState()")
+        // 重新初始化当前模式
+        val mode = _state.value.sniffMode
+        updateActiveTab { it.copy(sniffState = SniffState.SCANNING, sniffProgress = "正在重新嗅探...") }
+
+        // 启动超时检测
+        startSniffTimeoutCheck()
+
+        // 重新加载当前页面
+        val currentUrl = _state.value.currentUrl
+        if (currentUrl.isNotEmpty()) {
+            webviewAction?.invoke("reload")
+            addLog("重新加载页面: ${currentUrl.take(50)}...")
+
+            // 延迟后重新初始化嗅探（等待页面加载完成）
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(3000) // 等待 3 秒
+                when (mode) {
+                    SniffMode.AUTO -> jsExecutor?.invoke("CatCatchSniffer.init()")
+                    SniffMode.NETWORK -> jsExecutor?.invoke("CatCatchSniffer.initNetworkOnly()")
+                    SniffMode.DOM -> jsExecutor?.invoke("CatCatchSniffer.initDomOnly()")
+                    SniffMode.DEEP_SCAN -> jsExecutor?.invoke("CatCatchSniffer.deepScan()")
+                }
+                addLog("重新初始化嗅探: ${mode.label}")
+            }
+        }
+
+        addLog("重新嗅探: ${mode.label}")
+    }
+
+    // 新增: 停止嗅探
+    fun stopSniffing() {
+        updateActiveTab { it.copy(sniffState = SniffState.IDLE, sniffProgress = "") }
+        addLog("停止嗅探")
+    }
+
+    // 新增: 启动嗅探超时检测
+    private fun startSniffTimeoutCheck(tabId: String? = null) {
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(10000) // 10 秒超时
+            val currentTab = _state.value.tabs.find { it.id == (tabId ?: _state.value.activeTabId) }
+            if (currentTab != null && currentTab.sniffState == SniffState.SCANNING) {
+                // 超时且仍在嗅探中，自动停止
+                updateActiveTab(tabId) { tab ->
+                    tab.copy(
+                        sniffState = if (tab.sniffedLinks.isNotEmpty()) SniffState.FOUND else SniffState.EMPTY,
+                        sniffProgress = if (tab.sniffedLinks.isNotEmpty()) "发现 ${tab.sniffedLinks.size} 个链接" else "未发现链接"
+                    )
+                }
+                addLog("嗅探超时（10秒），自动停止")
+            }
+        }
+    }
+
+    // 新增: 更新嗅探结果状态
+    private fun updateSniffResultState(tabId: String? = null) {
+        updateActiveTab(tabId) { tab ->
+            val count = tab.sniffedLinks.size
+            tab.copy(
+                sniffState = if (count > 0) SniffState.FOUND else SniffState.IDLE,
+                sniffProgress = if (count > 0) "发现 $count 个链接" else ""
+            )
+        }
+
+        // 自动模式嗅探到结果后，自动保存当前模式为站点默认
+        val currentMode = _state.value.sniffMode
+        if (currentMode == SniffMode.AUTO) {
+            val currentUrl = _state.value.currentUrl
+            if (currentUrl.isNotEmpty()) {
+                val matchingBookmark = findBookmarkForDomain(currentUrl)
+                if (matchingBookmark == null) {
+                    // 没有绑定，自动保存当前模式为站点默认
+                    viewModelScope.launch {
+                        val bookmarks = bookmarkDao.getAllOnce()
+                        val matching = bookmarks.find { domainsMatch(it.url, currentUrl) }
+                        if (matching != null) {
+                            bookmarkDao.updateSniffMode(matching.id, currentMode.name)
+                            addLog("自动保存站点嗅探模式: ${currentMode.label}")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun selectVariant(linkUrl: String, variantIndex: Int) {
@@ -700,7 +906,7 @@ class BrowserViewModel @Inject constructor(
 
     fun clearSniffedLinks() {
         getCapturedUrls(_state.value.activeTabId).clear()
-        updateActiveTab { it.copy(sniffedLinks = emptyList()) }
+        updateActiveTab { it.copy(sniffedLinks = emptyList(), sniffState = SniffState.IDLE, sniffProgress = "") }
     }
 
     fun addLog(message: String) {
@@ -730,29 +936,32 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    private fun generateFileName(url: String): String {
+    private fun generateFileName(url: String, index: Int = 0): String {
         val pageTitle = _state.value.pageTitle
-        if (pageTitle.isNotBlank()) {
-            return pageTitle.replace(Regex("[<>:\"/\\\\|?*]"), "_")
+        val baseName = if (pageTitle.isNotBlank()) {
+            pageTitle.replace(Regex("[<>:\"/\\\\|?*]"), "_")
                 .replace(Regex("\\s+"), "_")
                 .take(50)
-        }
+        } else {
+            val path = url.substringBefore("?").substringAfterLast("/")
+            var name = path.substringBeforeLast(".").substringAfterLast("/")
 
-        val path = url.substringBefore("?").substringAfterLast("/")
-        var name = path.substringBeforeLast(".").substringAfterLast("/")
-
-        if (name.isEmpty() || name in listOf("index", "playlist", "master", "video", "stream")) {
-            val pathSegments = url.substringBefore("?").substringAfter("://").split("/")
-            for (segment in pathSegments.reversed()) {
-                val cleanSegment = segment.substringBeforeLast(".").substringBefore("?")
-                if (cleanSegment.isNotEmpty() && cleanSegment !in listOf("index", "playlist", "master", "video", "stream", "hls", "m3u8")) {
-                    name = cleanSegment
-                    break
+            if (name.isEmpty() || name in listOf("index", "playlist", "master", "video", "stream")) {
+                val pathSegments = url.substringBefore("?").substringAfter("://").split("/")
+                for (segment in pathSegments.reversed()) {
+                    val cleanSegment = segment.substringBeforeLast(".").substringBefore("?")
+                    if (cleanSegment.isNotEmpty() && cleanSegment !in listOf("index", "playlist", "master", "video", "stream", "hls", "m3u8")) {
+                        name = cleanSegment
+                        break
+                    }
                 }
             }
+
+            name.takeIf { it.isNotEmpty() && it.length > 2 } ?: "video_${System.currentTimeMillis() / 1000}"
         }
 
-        return name.takeIf { it.isNotEmpty() && it.length > 2 } ?: "video_${System.currentTimeMillis() / 1000}"
+        // 如果有多个结果，添加序号
+        return if (index > 0) "${baseName}_${index + 1}" else baseName
     }
 
     private suspend fun getUniqueFileName(baseName: String, outputDir: String): String {
@@ -767,6 +976,51 @@ class BrowserViewModel @Inject constructor(
         } while (uniqueName in existingNames)
 
         return uniqueName
+    }
+
+    // ==================== 域名匹配工具函数 ====================
+
+    /**
+     * 提取域名（去除 www 前缀）
+     */
+    private fun extractDomain(url: String): String {
+        return try {
+            val uri = java.net.URI(url)
+            val host = uri.host ?: return ""
+            // 去除 www 前缀
+            host.removePrefix("www.")
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * 域名匹配（支持子域名）
+     */
+    private fun domainsMatch(url1: String, url2: String): Boolean {
+        val d1 = extractDomain(url1)
+        val d2 = extractDomain(url2)
+        if (d1.isEmpty() || d2.isEmpty()) return false
+        return d1 == d2 || d1.endsWith(".$d2") || d2.endsWith(".$d1")
+    }
+
+    /**
+     * 查找域名对应的书签（有嗅探模式绑定）
+     */
+    private fun findBookmarkForDomain(url: String): BookmarkEntity? {
+        return _bookmarks.value.find { bm ->
+            domainsMatch(bm.url, url) && bm.sniffMode.isNotEmpty()
+        }
+    }
+
+    /**
+     * 更新书签的嗅探模式绑定
+     */
+    fun updateBookmarkSniffMode(bookmarkId: Long, sniffMode: SniffMode?) {
+        viewModelScope.launch {
+            bookmarkDao.updateSniffMode(bookmarkId, sniffMode?.name ?: "")
+            addLog("更新书签嗅探模式: ${sniffMode?.label ?: "默认"}")
+        }
     }
 
     private fun extractHeadersFromUrl(url: String): Map<String, String> {
