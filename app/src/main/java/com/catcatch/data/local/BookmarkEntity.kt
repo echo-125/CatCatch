@@ -5,17 +5,17 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * 浏览器快捷方式实体
+ * 浏览器书签实体
  */
 @Entity(
-    tableName = "shortcuts",
+    tableName = "bookmarks",
     indices = [Index(value = ["url"], unique = true)]
 )
-data class ShortcutEntity(
+data class BookmarkEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val url: String,           // 网站 URL
-    val title: String,         // 显示名称
-    val faviconUrl: String = "", // favicon URL（备用，主要使用 Google S2 服务）
+    val url: String,
+    val title: String,
+    val faviconUrl: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )

@@ -44,6 +44,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FileDownload
@@ -52,9 +53,11 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.StarOutline
 import coil.compose.AsyncImage
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -63,6 +66,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -94,6 +98,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.catcatch.data.local.BookmarkEntity
 import com.catcatch.ui.browser.config.SiteConfigs
 import com.catcatch.ui.browser.model.SniffSource
 import com.catcatch.ui.browser.model.Tab
@@ -106,7 +111,7 @@ fun BrowserScreen(
     viewModel: BrowserViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
-    val shortcuts by viewModel.shortcuts.collectAsState()
+    val bookmarks by viewModel.bookmarks.collectAsState()
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
 
@@ -135,7 +140,7 @@ fun BrowserScreen(
         }
     }
 
-    // 本地 URL 输入状态，避免频繁触发重组
+    // 本地 URL 输入状态
     var localUrl by remember { mutableStateOf(state.currentUrl) }
     var isEditing by remember { mutableStateOf(false) }
     LaunchedEffect(state.currentUrl) {
@@ -146,16 +151,15 @@ fun BrowserScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 顶部地址栏（始终显示）
+            // 顶部地址栏
             AddressBar(
                 tabCount = state.tabCount,
                 url = localUrl,
                 isLoading = state.isLoading,
                 canGoBack = state.canGoBack,
                 canGoForward = state.canGoForward,
-                sniffedCount = state.activeTabSniffedLinks.size,
                 isNewTab = state.mode == BrowserMode.NEW_TAB,
-                isFavorite = state.isCurrentTabFavorite,
+                isBookmarked = state.isCurrentTabBookmarked,
                 onUrlChange = { newUrl ->
                     isEditing = true
                     localUrl = newUrl
@@ -173,8 +177,8 @@ fun BrowserScreen(
                 onForward = { viewModel.goForward() },
                 onRefresh = { viewModel.loadUrl(localUrl) },
                 onTabManager = viewModel::toggleTabManager,
-                onDeepScan = { viewModel.triggerDeepScan() },
-                onFavorite = { viewModel.toggleFavorite() }
+                onBookmark = { viewModel.toggleBookmark() },
+                onBookmarkManager = { viewModel.toggleBookmarkManager() }
             )
 
             // 加载进度条
@@ -182,7 +186,7 @@ fun BrowserScreen(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
-            // 嗅探结果提示条（可点击展开面板）
+            // 嗅探结果提示条
             if (state.activeTabSniffedLinks.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -206,9 +210,8 @@ fun BrowserScreen(
                 }
             }
 
-            // 内容区：WebView 始终保持在 composition 中，避免切换模式时丢失状态
+            // 内容区
             Box(modifier = Modifier.weight(1f)) {
-                // WebView 始终存在，切换模式时不销毁
                 CatCatchWebView(
                     tabs = state.tabs,
                     activeTabId = state.activeTabId,
@@ -217,7 +220,7 @@ fun BrowserScreen(
                     sslStrictMode = state.sslStrictMode
                 )
 
-                // 非浏览模式时覆盖遮罩
+                // 新标签页遮罩
                 if (state.mode != BrowserMode.BROWSING) {
                     Box(
                         modifier = Modifier
@@ -225,16 +228,16 @@ fun BrowserScreen(
                             .background(MaterialTheme.colorScheme.surface)
                     ) {
                         NewTabContent(
-                            shortcuts = shortcuts,
-                            onShortcutClick = { url -> viewModel.loadUrl(url) },
-                            onShortcutDelete = { url -> viewModel.removeShortcut(url) }
+                            bookmarks = bookmarks,
+                            onBookmarkClick = { url -> viewModel.loadUrl(url) },
+                            onBookmarkDelete = { url -> viewModel.removeBookmark(url) }
                         )
                     }
                 }
             }
         }
 
-        // 悬浮嗅探按钮（所有页面可见）
+        // 悬浮嗅探按钮
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -267,14 +270,13 @@ fun BrowserScreen(
             }
         }
 
-        // 标签管理器覆盖层（带动画）
+        // 标签管理器覆盖层
         AnimatedVisibility(
             visible = state.isTabManagerOpen,
             enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it / 3 }),
             exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it / 3 })
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // 半透明背景
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -282,9 +284,7 @@ fun BrowserScreen(
                         .clickable { viewModel.closeTabManager() }
                 )
 
-                // 标签管理面板
                 Row(modifier = Modifier.fillMaxSize()) {
-                    // 左侧面板（宽度 33%）
                     Column(
                         modifier = Modifier
                             .fillMaxHeight()
@@ -292,7 +292,6 @@ fun BrowserScreen(
                             .background(MaterialTheme.colorScheme.surface)
                             .padding(12.dp)
                     ) {
-                        // 标题
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -315,7 +314,6 @@ fun BrowserScreen(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // 标签列表
                         LazyColumn(modifier = Modifier.weight(1f)) {
                             items(state.tabs, key = { it.id }) { tab ->
                                 TabItem(
@@ -328,7 +326,6 @@ fun BrowserScreen(
                         }
                     }
 
-                    // 右侧空白（点击关闭）- 添加 clickable 防止穿透
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -337,6 +334,46 @@ fun BrowserScreen(
                                 indication = null,
                                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                             )
+                    )
+                }
+            }
+        }
+
+        // 书签管理器覆盖层
+        AnimatedVisibility(
+            visible = state.isBookmarkManagerOpen,
+            enter = fadeIn() + slideInHorizontally(initialOffsetX = { it / 3 }),
+            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it / 3 })
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .clickable { viewModel.closeBookmarkManager() }
+                )
+
+                Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.End) {
+                    // 右侧空白（点击关闭）
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .weight(1f)
+                            .clickable(
+                                onClick = { viewModel.closeBookmarkManager() },
+                                indication = null,
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                            )
+                    )
+
+                    // 右侧面板（宽度 50%）
+                    BookmarkManagerPanel(
+                        bookmarks = bookmarks,
+                        onClose = { viewModel.closeBookmarkManager() },
+                        onBookmarkClick = { url -> viewModel.loadBookmark(url) },
+                        onBookmarkDelete = { id -> viewModel.removeBookmarkById(id) },
+                        onBookmarksDelete = { ids -> viewModel.deleteSelectedBookmarks(ids) },
+                        onBookmarkAdd = { title, url -> viewModel.addBookmark(title, url) }
                     )
                 }
             }
@@ -403,7 +440,7 @@ fun BrowserScreen(
     }
 }
 
-// ==================== 地址栏（始终显示）====================
+// ==================== 地址栏 ====================
 
 @Composable
 private fun AddressBar(
@@ -412,9 +449,8 @@ private fun AddressBar(
     isLoading: Boolean,
     canGoBack: Boolean,
     canGoForward: Boolean,
-    sniffedCount: Int,
     isNewTab: Boolean,
-    isFavorite: Boolean,
+    isBookmarked: Boolean,
     onUrlChange: (String) -> Unit,
     onLoad: () -> Unit,
     onHome: () -> Unit,
@@ -422,8 +458,8 @@ private fun AddressBar(
     onForward: () -> Unit,
     onRefresh: () -> Unit,
     onTabManager: () -> Unit,
-    onDeepScan: () -> Unit,
-    onFavorite: () -> Unit
+    onBookmark: () -> Unit,
+    onBookmarkManager: () -> Unit
 ) {
     val tabButtonSize = 36.dp
     val navButtonSize = 44.dp
@@ -460,7 +496,7 @@ private fun AddressBar(
 
         Spacer(modifier = Modifier.width(6.dp))
 
-        // URL 输入框（带发送/刷新按钮）
+        // URL 输入框
         Row(
             modifier = Modifier
                 .weight(1f)
@@ -522,7 +558,7 @@ private fun AddressBar(
 
         Spacer(modifier = Modifier.width(6.dp))
 
-        // 后退按钮（大一些）
+        // 后退按钮
         IconButton(
             onClick = onBack,
             enabled = canGoBack,
@@ -535,7 +571,7 @@ private fun AddressBar(
             )
         }
 
-        // 前进按钮（大一些）
+        // 前进按钮
         IconButton(
             onClick = onForward,
             enabled = canGoForward,
@@ -545,6 +581,19 @@ private fun AddressBar(
                 Icons.AutoMirrored.Filled.ArrowForward,
                 "前进",
                 modifier = Modifier.size(navIconSize)
+            )
+        }
+
+        // 书签按钮（五角星）- 移动到后退按钮左侧
+        IconButton(
+            onClick = onBookmark,
+            modifier = Modifier.size(navButtonSize)
+        ) {
+            Icon(
+                if (isBookmarked) Icons.Default.Star else Icons.Outlined.StarOutline,
+                "书签",
+                modifier = Modifier.size(navIconSize),
+                tint = if (isBookmarked) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
@@ -560,16 +609,15 @@ private fun AddressBar(
             )
         }
 
-        // 收藏按钮（五角星，点击后为黑色）
+        // 书签管理按钮（使用 Bookmark 图标）
         IconButton(
-            onClick = onFavorite,
+            onClick = onBookmarkManager,
             modifier = Modifier.size(navButtonSize)
         ) {
             Icon(
-                if (isFavorite) Icons.Default.Star else Icons.Outlined.StarOutline,
-                "收藏",
-                modifier = Modifier.size(navIconSize),
-                tint = if (isFavorite) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant
+                Icons.Outlined.BookmarkBorder,
+                "书签管理",
+                modifier = Modifier.size(navIconSize)
             )
         }
     }
@@ -579,35 +627,33 @@ private fun AddressBar(
 
 @Composable
 private fun NewTabContent(
-    shortcuts: List<com.catcatch.data.local.ShortcutEntity>,
-    onShortcutClick: (String) -> Unit,
-    onShortcutDelete: (String) -> Unit
+    bookmarks: List<BookmarkEntity>,
+    onBookmarkClick: (String) -> Unit,
+    onBookmarkDelete: (String) -> Unit
 ) {
-    // 待删除的快捷方式
-    var shortcutToDelete by remember { mutableStateOf<com.catcatch.data.local.ShortcutEntity?>(null) }
+    var bookmarkToDelete by remember { mutableStateOf<BookmarkEntity?>(null) }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        if (shortcuts.isNotEmpty()) {
+        if (bookmarks.isNotEmpty()) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(shortcuts) { shortcut ->
-                    ShortcutItem(
-                        shortcut = shortcut,
-                        onClick = { onShortcutClick(shortcut.url) },
-                        onLongClick = { shortcutToDelete = shortcut }
+                items(bookmarks) { bookmark ->
+                    BookmarkGridItem(
+                        bookmark = bookmark,
+                        onClick = { onBookmarkClick(bookmark.url) },
+                        onLongClick = { bookmarkToDelete = bookmark }
                     )
                 }
             }
         } else {
-            // 空状态提示
             Text(
                 "收藏网站后会在这里显示",
                 style = MaterialTheme.typography.bodyMedium,
@@ -618,21 +664,21 @@ private fun NewTabContent(
     }
 
     // 删除确认对话框
-    shortcutToDelete?.let { shortcut ->
+    bookmarkToDelete?.let { bookmark ->
         AlertDialog(
-            onDismissRequest = { shortcutToDelete = null },
-            title = { Text("删除快捷方式") },
-            text = { Text("确定删除「${shortcut.title}」？") },
+            onDismissRequest = { bookmarkToDelete = null },
+            title = { Text("删除书签") },
+            text = { Text("确定删除「${bookmark.title}」？") },
             confirmButton = {
                 TextButton(onClick = {
-                    onShortcutDelete(shortcut.url)
-                    shortcutToDelete = null
+                    onBookmarkDelete(bookmark.url)
+                    bookmarkToDelete = null
                 }) {
                     Text("删除", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { shortcutToDelete = null }) {
+                TextButton(onClick = { bookmarkToDelete = null }) {
                     Text("取消")
                 }
             }
@@ -642,17 +688,11 @@ private fun NewTabContent(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ShortcutItem(
-    shortcut: com.catcatch.data.local.ShortcutEntity,
+private fun BookmarkGridItem(
+    bookmark: BookmarkEntity,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val host = try {
-        android.net.Uri.parse(shortcut.url).host ?: ""
-    } catch (e: Exception) {
-        ""
-    }
-
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
@@ -671,21 +711,35 @@ private fun ShortcutItem(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            if (host.isNotEmpty()) {
+            if (bookmark.faviconUrl.isNotEmpty()) {
                 AsyncImage(
-                    model = "https://favicon.im/$host",
-                    contentDescription = shortcut.title,
+                    model = bookmark.faviconUrl,
+                    contentDescription = bookmark.title,
                     modifier = Modifier
                         .size(48.dp)
                         .clip(RoundedCornerShape(12.dp))
                 )
             } else {
-                Icon(
-                    Icons.Default.Public,
-                    contentDescription = shortcut.title,
-                    modifier = Modifier.size(32.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                val host = try {
+                    android.net.Uri.parse(bookmark.url).host?.take(1)?.uppercase() ?: ""
+                } catch (e: Exception) {
+                    ""
+                }
+                if (host.isNotEmpty()) {
+                    Text(
+                        text = host,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Public,
+                        contentDescription = bookmark.title,
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
@@ -693,13 +747,371 @@ private fun ShortcutItem(
 
         // 标题
         Text(
-            text = shortcut.title,
+            text = bookmark.title,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+// ==================== 书签管理面板 ====================
+
+@Composable
+private fun BookmarkManagerPanel(
+    bookmarks: List<BookmarkEntity>,
+    onClose: () -> Unit,
+    onBookmarkClick: (String) -> Unit,
+    onBookmarkDelete: (Long) -> Unit,
+    onBookmarksDelete: (Set<Long>) -> Unit,
+    onBookmarkAdd: (String, String) -> Unit
+) {
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<Long>()) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .fillMaxWidth(0.5f)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(12.dp)
+    ) {
+        // 标题栏
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "书签管理",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, "关闭")
+            }
+        }
+
+        // 操作栏（根据模式切换）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isSelectionMode) {
+                // 多选模式：显示已选数量和操作按钮
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "已选 ${selectedIds.size} 项",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    // 全选/取消全选
+                    TextButton(
+                        onClick = {
+                            selectedIds = if (selectedIds.size == bookmarks.size) {
+                                emptySet()
+                            } else {
+                                bookmarks.map { it.id }.toSet()
+                            }
+                        }
+                    ) {
+                        Text(
+                            if (selectedIds.size == bookmarks.size) "取消全选" else "全选",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                Row {
+                    TextButton(
+                        onClick = {
+                            isSelectionMode = false
+                            selectedIds = emptySet()
+                        }
+                    ) {
+                        Text("取消")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = {
+                            if (selectedIds.isNotEmpty()) {
+                                showDeleteConfirmDialog = true
+                            }
+                        },
+                        enabled = selectedIds.isNotEmpty()
+                    ) {
+                        Text(
+                            "删除",
+                            color = if (selectedIds.isNotEmpty()) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                // 普通模式：显示新增和批量管理按钮
+                TextButton(onClick = { showAddDialog = true }) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("新增")
+                }
+                TextButton(onClick = { isSelectionMode = true }) {
+                    Icon(
+                        Icons.Default.DeleteSweep,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("多选")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 书签列表
+        if (bookmarks.isNotEmpty()) {
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(bookmarks, key = { it.id }) { bookmark ->
+                    BookmarkItem(
+                        bookmark = bookmark,
+                        isSelectionMode = isSelectionMode,
+                        isSelected = selectedIds.contains(bookmark.id),
+                        onClick = {
+                            if (isSelectionMode) {
+                                selectedIds = if (selectedIds.contains(bookmark.id)) {
+                                    selectedIds - bookmark.id
+                                } else {
+                                    selectedIds + bookmark.id
+                                }
+                            } else {
+                                onBookmarkClick(bookmark.url)
+                            }
+                        },
+                        onDelete = { onBookmarkDelete(bookmark.id) }
+                    )
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "暂无书签",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+
+    // 新增书签对话框
+    if (showAddDialog) {
+        AddBookmarkDialog(
+            onDismiss = { showAddDialog = false },
+            onConfirm = { title, url ->
+                onBookmarkAdd(title, url)
+                showAddDialog = false
+            }
+        )
+    }
+
+    // 批量删除确认对话框
+    if (showDeleteConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("批量删除书签") },
+            text = { Text("确定删除选中的 ${selectedIds.size} 个书签？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onBookmarksDelete(selectedIds)
+                    selectedIds = emptySet()
+                    isSelectionMode = false
+                    showDeleteConfirmDialog = false
+                }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+}
+
+// ==================== 新增书签对话框 ====================
+
+@Composable
+private fun AddBookmarkDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新增书签") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("标题") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("网址") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("https://") }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(title, url) },
+                enabled = title.isNotBlank() && url.isNotBlank()
+            ) {
+                Text("添加")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+// ==================== 书签管理项 ====================
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkItem(
+    bookmark: BookmarkEntity,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant
+            )
+            .clickable { onClick() }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 多选框（多选模式下显示）
+        if (isSelectionMode) {
+            Checkbox(
+                checked = isSelected,
+                onCheckedChange = { onClick() },
+                modifier = Modifier.padding(end = 8.dp)
+            )
+        }
+
+        // Favicon
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center
+        ) {
+            if (bookmark.faviconUrl.isNotEmpty()) {
+                AsyncImage(
+                    model = bookmark.faviconUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                )
+            } else {
+                val host = try {
+                    android.net.Uri.parse(bookmark.url).host?.take(1)?.uppercase() ?: ""
+                } catch (e: Exception) {
+                    ""
+                }
+                if (host.isNotEmpty()) {
+                    Text(
+                        text = host,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Public,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        // 书签信息
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                bookmark.title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                bookmark.url,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                else MaterialTheme.colorScheme.outline
+            )
+        }
+
+        // 删除按钮（非选择模式时显示）
+        if (!isSelectionMode) {
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    "删除",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
     }
 }
 
@@ -913,7 +1325,7 @@ private fun SniffedLinkItem(
                 }
             }
 
-            // 第三行：变体选择（有变体时）
+            // 第三行：变体选择
             if (link.hasVariants) {
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1022,7 +1434,7 @@ private fun CatCatchWebView(
         }
     }
 
-    // 容器 + 子视图管理（update 回调有容器直接引用，适合增删子视图）
+    // 容器 + 子视图管理
     AndroidView(
         factory = { ctx ->
             android.widget.FrameLayout(ctx).apply {
@@ -1036,7 +1448,6 @@ private fun CatCatchWebView(
         update = { container ->
             val tabIds = tabs.map { it.id }.toSet()
 
-            // 创建有 URL 的标签的 WebView（空标签不创建，避免 MIUI 拦截器崩溃）
             for (tab in tabs) {
                 if (tab.id !in webViews && tab.url.isNotEmpty()) {
                     val webView = createWebView(context, tab.id, snifferScript, viewModel, sslStrictMode)
@@ -1045,14 +1456,11 @@ private fun CatCatchWebView(
                 }
             }
 
-            // 切换可见性：activeTab 可见，其他隐藏
             for ((id, view) in webViews) {
                 view.visibility = if (id == activeTabId) android.view.View.VISIBLE else android.view.View.GONE
             }
-            // 将活跃标签置于最前
             webViews[activeTabId]?.let { container.bringChildToFront(it) }
 
-            // 销毁已关闭标签的 WebView
             val toRemove = webViews.keys.filter { it !in tabIds }
             for (id in toRemove) {
                 webViews[id]?.let { webView ->

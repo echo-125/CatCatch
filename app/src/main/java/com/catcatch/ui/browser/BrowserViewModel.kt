@@ -5,8 +5,8 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.catcatch.data.local.AppPreferences
-import com.catcatch.data.local.ShortcutDao
-import com.catcatch.data.local.ShortcutEntity
+import com.catcatch.data.local.BookmarkDao
+import com.catcatch.data.local.BookmarkEntity
 import com.catcatch.data.remote.M3U8Parser
 import com.catcatch.data.repository.DownloadRepository
 import com.catcatch.data.repository.SettingsRepository
@@ -55,6 +55,7 @@ data class BrowserState(
     val activeTabId: String = tabs.firstOrNull()?.id ?: "",
     val mode: BrowserMode = BrowserMode.NEW_TAB,
     val isTabManagerOpen: Boolean = false,
+    val isBookmarkManagerOpen: Boolean = false,
     val isSnifferPanelOpen: Boolean = false,
     val sniffMode: SniffMode = SniffMode.AUTO,
     val siteConfig: SiteConfig? = null,
@@ -63,57 +64,30 @@ data class BrowserState(
     val success: String? = null,
     val error: String? = null
 ) {
-    /**
-     * 获取当前活跃标签
-     */
     val activeTab: Tab?
         get() = tabs.find { it.id == activeTabId }
 
-    /**
-     * 标签数量
-     */
     val tabCount: Int
         get() = tabs.size
 
-    /**
-     * 当前 URL
-     */
     val currentUrl: String
         get() = activeTab?.url ?: ""
 
-    /**
-     * 页面标题
-     */
     val pageTitle: String
         get() = activeTab?.title ?: ""
 
-    /**
-     * 是否正在加载
-     */
     val isLoading: Boolean
         get() = activeTab?.isLoading ?: false
 
-    /**
-     * 是否可以后退
-     */
     val canGoBack: Boolean
         get() = activeTab?.canGoBack ?: false
 
-    /**
-     * 是否可以前进
-     */
     val canGoForward: Boolean
         get() = activeTab?.canGoForward ?: false
 
-    /**
-     * 当前标签是否已收藏
-     */
-    val isCurrentTabFavorite: Boolean
-        get() = activeTab?.isFavorite ?: false
+    val isCurrentTabBookmarked: Boolean
+        get() = activeTab?.isBookmarked ?: false
 
-    /**
-     * 当前标签的嗅探结果
-     */
     val activeTabSniffedLinks: List<SniffedLink>
         get() = activeTab?.sniffedLinks ?: emptyList()
 }
@@ -125,7 +99,7 @@ data class BrowserState(
 class BrowserViewModel @Inject constructor(
     private val repository: DownloadRepository,
     private val settingsRepository: SettingsRepository,
-    private val shortcutDao: ShortcutDao,
+    private val bookmarkDao: BookmarkDao,
     private val okHttpClient: OkHttpClient,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -133,8 +107,8 @@ class BrowserViewModel @Inject constructor(
     private val _state = MutableStateFlow(BrowserState())
     val state: StateFlow<BrowserState> = _state.asStateFlow()
 
-    private val _shortcuts = MutableStateFlow<List<ShortcutEntity>>(emptyList())
-    val shortcuts: StateFlow<List<ShortcutEntity>> = _shortcuts.asStateFlow()
+    private val _bookmarks = MutableStateFlow<List<BookmarkEntity>>(emptyList())
+    val bookmarks: StateFlow<List<BookmarkEntity>> = _bookmarks.asStateFlow()
 
     private val m3u8Parser = M3U8Parser(okHttpClient)
     private var currentDownloadDir = AppPreferences.DEFAULT_DOWNLOAD_DIR
@@ -147,17 +121,10 @@ class BrowserViewModel @Inject constructor(
     private var jsExecutor: ((String) -> Unit)? = null
     private var webviewAction: ((String) -> Unit)? = null
 
-    /**
-     * 注册 JS 执行回调，由 Composable 层在 WebView 创建时调用
-     */
     fun registerJsExecutor(executor: ((String) -> Unit)?) {
         jsExecutor = executor
     }
 
-    /**
-     * 注册 WebView 操作回调，由 Composable 层提供对活跃标签 WebView 的操作能力
-     * action: "back" | "forward"
-     */
     fun registerWebviewAction(action: ((String) -> Unit)?) {
         webviewAction = action
     }
@@ -171,10 +138,10 @@ class BrowserViewModel @Inject constructor(
     }
 
     init {
-        // 加载快捷方式
+        // 加载书签
         viewModelScope.launch {
-            shortcutDao.getAll().collect { list ->
-                _shortcuts.value = list
+            bookmarkDao.getAll().collect { list ->
+                _bookmarks.value = list
             }
         }
         // 加载下载目录配置
@@ -189,7 +156,7 @@ class BrowserViewModel @Inject constructor(
                 _state.update { it.copy(sslStrictMode = strict) }
             }
         }
-        // 恢复标签页（仅启动时恢复一次，避免保存后重复恢复覆盖运行时状态）
+        // 恢复标签页
         viewModelScope.launch {
             val json = settingsRepository.browserTabs.firstOrNull()
             if (json != null) {
@@ -224,9 +191,6 @@ class BrowserViewModel @Inject constructor(
 
     // ==================== 标签页管理 ====================
 
-    /**
-     * 新建标签页
-     */
     fun newTab() {
         val newTab = Tab()
         _state.update {
@@ -238,9 +202,6 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 关闭标签页
-     */
     fun closeTab(tabId: String) {
         _state.update { state ->
             val newTabs = state.tabs.filter { it.id != tabId }
@@ -275,18 +236,13 @@ class BrowserViewModel @Inject constructor(
                     } else {
                         state.mode
                     },
-                    // 关闭活跃标签时自动关闭标签管理器；关闭非活跃标签时保持打开
                     isTabManagerOpen = if (isActiveTab) false else state.isTabManagerOpen
                 )
             }
         }
-        // 清理已关闭标签的已捕获 URL
         capturedUrls.remove(tabId)
     }
 
-    /**
-     * 关闭所有标签页，重置为空白新标签
-     */
     fun closeAllTabs() {
         val newTab = Tab()
         _state.update {
@@ -300,9 +256,6 @@ class BrowserViewModel @Inject constructor(
         capturedUrls.clear()
     }
 
-    /**
-     * 切换标签页
-     */
     fun switchTab(tabId: String) {
         _state.update { state ->
             val tab = state.tabs.find { it.id == tabId } ?: return@update state
@@ -315,22 +268,132 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 切换标签管理器
-     */
     fun toggleTabManager() {
         _state.update {
             it.copy(isTabManagerOpen = !it.isTabManagerOpen)
         }
     }
 
-    /**
-     * 关闭标签管理器
-     */
     fun closeTabManager() {
         _state.update {
             it.copy(isTabManagerOpen = false)
         }
+    }
+
+    // ==================== 书签管理 ====================
+
+    fun toggleBookmarkManager() {
+        _state.update {
+            it.copy(isBookmarkManagerOpen = !it.isBookmarkManagerOpen)
+        }
+    }
+
+    fun closeBookmarkManager() {
+        _state.update {
+            it.copy(isBookmarkManagerOpen = false)
+        }
+    }
+
+    fun toggleBookmark() {
+        val tab = _state.value.activeTab ?: return
+        if (tab.url.isEmpty()) return
+
+        viewModelScope.launch {
+            val isCurrentlyBookmarked = bookmarkDao.existsByUrl(tab.url)
+            if (isCurrentlyBookmarked) {
+                bookmarkDao.deleteByUrl(tab.url)
+            } else {
+                val title = tab.title.ifEmpty {
+                    Uri.parse(tab.url).host ?: tab.url
+                }
+                val faviconUrl = generateFaviconUrl(tab.url)
+                bookmarkDao.insert(
+                    BookmarkEntity(
+                        url = tab.url,
+                        title = title.take(MAX_TITLE_LENGTH),
+                        faviconUrl = faviconUrl
+                    )
+                )
+            }
+            updateActiveTab { it.copy(isBookmarked = !isCurrentlyBookmarked) }
+        }
+    }
+
+    fun removeBookmark(url: String) {
+        viewModelScope.launch {
+            bookmarkDao.deleteByUrl(url)
+            val currentUrl = _state.value.currentUrl
+            if (currentUrl == url) {
+                updateActiveTab { it.copy(isBookmarked = false) }
+            }
+        }
+    }
+
+    fun removeBookmarkById(id: Long) {
+        viewModelScope.launch {
+            val bookmark = _bookmarks.value.find { it.id == id }
+            bookmark?.let {
+                bookmarkDao.deleteById(id)
+                val currentUrl = _state.value.currentUrl
+                if (currentUrl == it.url) {
+                    updateActiveTab { tab -> tab.copy(isBookmarked = false) }
+                }
+            }
+        }
+    }
+
+    fun updateBookmark(id: Long, newTitle: String, newUrl: String) {
+        viewModelScope.launch {
+            val oldBookmark = _bookmarks.value.find { it.id == id }
+            if (oldBookmark != null) {
+                if (oldBookmark.title != newTitle) {
+                    bookmarkDao.updateTitle(id, newTitle)
+                }
+                if (oldBookmark.url != newUrl) {
+                    bookmarkDao.updateUrl(id, newUrl)
+                    val faviconUrl = generateFaviconUrl(newUrl)
+                    bookmarkDao.updateFavicon(id, faviconUrl)
+                }
+            }
+        }
+    }
+
+    fun addBookmark(title: String, url: String) {
+        viewModelScope.launch {
+            val finalUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                "https://$url"
+            } else {
+                url
+            }
+            val faviconUrl = generateFaviconUrl(finalUrl)
+            bookmarkDao.insert(
+                BookmarkEntity(
+                    url = finalUrl,
+                    title = title.take(MAX_TITLE_LENGTH),
+                    faviconUrl = faviconUrl
+                )
+            )
+        }
+    }
+
+    fun deleteSelectedBookmarks(selectedIds: Set<Long>) {
+        viewModelScope.launch {
+            selectedIds.forEach { id ->
+                bookmarkDao.deleteById(id)
+                val bookmark = _bookmarks.value.find { it.id == id }
+                bookmark?.let {
+                    val currentUrl = _state.value.currentUrl
+                    if (currentUrl == it.url) {
+                        updateActiveTab { tab -> tab.copy(isBookmarked = false) }
+                    }
+                }
+            }
+        }
+    }
+
+    fun loadBookmark(url: String) {
+        loadUrl(url)
+        closeBookmarkManager()
     }
 
     // ==================== URL 和导航 ====================
@@ -344,7 +407,6 @@ class BrowserViewModel @Inject constructor(
             url
         }
 
-        // 清空当前标签的已捕获 URL
         getCapturedUrls(_state.value.activeTabId).clear()
 
         _state.update { state ->
@@ -368,9 +430,6 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 返回主页（新标签页）
-     */
     fun goHome() {
         _state.update { state ->
             val updatedTabs = state.tabs.map { tab ->
@@ -387,58 +446,15 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 切换收藏状态（同时管理快捷方式）
-     */
-    fun toggleFavorite() {
-        val tab = _state.value.activeTab ?: return
-        if (tab.url.isEmpty()) return
-
-        viewModelScope.launch {
-            val isCurrentlyFavorite = shortcutDao.existsByUrl(tab.url)
-            if (isCurrentlyFavorite) {
-                shortcutDao.deleteByUrl(tab.url)
-            } else {
-                if (shortcutDao.count() < MAX_SHORTCUTS) {
-                    val title = tab.title.ifEmpty {
-                        Uri.parse(tab.url).host ?: tab.url
-                    }
-                    shortcutDao.insert(
-                        ShortcutEntity(
-                            url = tab.url,
-                            title = title.take(MAX_TITLE_LENGTH)
-                        )
-                    )
-                }
-            }
-            updateActiveTab { it.copy(isFavorite = !isCurrentlyFavorite) }
-        }
-    }
-
-    /**
-     * 移除快捷方式
-     */
-    fun removeShortcut(url: String) {
-        viewModelScope.launch {
-            shortcutDao.deleteByUrl(url)
-            // 同步更新当前标签的收藏状态
-            val currentUrl = _state.value.currentUrl
-            if (currentUrl == url) {
-                updateActiveTab { it.copy(isFavorite = false) }
-            }
-        }
-    }
-
     fun onPageStarted(url: String, tabId: String? = null) {
         updateActiveTab(tabId) { it.copy(isLoading = true) }
     }
 
     fun onPageFinished(url: String, tabId: String? = null) {
         updateActiveTab(tabId) { it.copy(isLoading = false, url = url) }
-        // 同步数据库中的收藏状态
         viewModelScope.launch {
-            val isFav = shortcutDao.existsByUrl(url)
-            updateActiveTab(tabId) { it.copy(isFavorite = isFav) }
+            val isBookmarked = bookmarkDao.existsByUrl(url)
+            updateActiveTab(tabId) { it.copy(isBookmarked = isBookmarked) }
         }
     }
 
@@ -630,9 +646,6 @@ class BrowserViewModel @Inject constructor(
 
     // ==================== UI 状态 ====================
 
-    /**
-     * 切换嗅探面板展开/收起
-     */
     fun toggleSnifferPanel() {
         _state.update { it.copy(isSnifferPanelOpen = !it.isSnifferPanelOpen) }
     }
@@ -641,16 +654,10 @@ class BrowserViewModel @Inject constructor(
         _state.update { it.copy(isSnifferPanelOpen = false) }
     }
 
-    /**
-     * 设置嗅探模式
-     */
     fun setSniffMode(mode: SniffMode) {
         _state.update { it.copy(sniffMode = mode) }
     }
 
-    /**
-     * 选择指定链接的变体（分辨率）
-     */
     fun selectVariant(linkUrl: String, variantIndex: Int) {
         updateActiveTab { tab ->
             val updatedLinks = tab.sniffedLinks.map { link ->
@@ -660,9 +667,6 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 批量添加所有嗅探到的链接
-     */
     fun addAllTasks() {
         val links = _state.value.activeTabSniffedLinks
         if (links.isEmpty()) return
@@ -715,6 +719,16 @@ class BrowserViewModel @Inject constructor(
     }
 
     // ==================== 辅助函数 ====================
+
+    private fun generateFaviconUrl(url: String): String {
+        return try {
+            val uri = Uri.parse(url)
+            val host = uri.host ?: return ""
+            "https://s2.googleusercontent.com/s2/favicons?domain=$host&sz=64"
+        } catch (e: Exception) {
+            ""
+        }
+    }
 
     private fun generateFileName(url: String): String {
         val pageTitle = _state.value.pageTitle
@@ -830,13 +844,12 @@ class BrowserViewModel @Inject constructor(
         val root = org.json.JSONObject()
         val arr = org.json.JSONArray()
         for (tab in tabs) {
-            // 仅持久化有 URL 的标签，跳过空新标签页
             if (tab.url.isEmpty()) continue
             val obj = org.json.JSONObject()
             obj.put("id", tab.id)
             obj.put("url", tab.url)
             obj.put("title", tab.title)
-            obj.put("isFavorite", tab.isFavorite)
+            obj.put("isBookmarked", tab.isBookmarked)
             arr.put(obj)
         }
         root.put("tabs", arr)
@@ -857,7 +870,7 @@ class BrowserViewModel @Inject constructor(
                         id = obj.getString("id"),
                         url = obj.getString("url"),
                         title = obj.optString("title", ""),
-                        isFavorite = obj.optBoolean("isFavorite", false)
+                        isBookmarked = obj.optBoolean("isBookmarked", false)
                     )
                 )
             }
@@ -870,9 +883,6 @@ class BrowserViewModel @Inject constructor(
     }
 
     companion object {
-        /** 最大快捷方式数量 */
-        private const val MAX_SHORTCUTS = 12
-        /** 快捷方式标题最大长度 */
-        private const val MAX_TITLE_LENGTH = 20
+        private const val MAX_TITLE_LENGTH = 50
     }
 }

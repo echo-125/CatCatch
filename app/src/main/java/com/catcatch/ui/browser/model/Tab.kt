@@ -12,7 +12,7 @@ data class Tab(
     val isLoading: Boolean = false,
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
-    val isFavorite: Boolean = false,
+    val isBookmarked: Boolean = false,
     val sniffedLinks: List<SniffedLink> = emptyList()
 ) {
     /**
