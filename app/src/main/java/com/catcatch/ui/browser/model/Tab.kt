@@ -1,5 +1,6 @@
 package com.catcatch.ui.browser.model
 
+import com.catcatch.ui.browser.SniffState
 import java.util.UUID
 
 /**
@@ -13,7 +14,9 @@ data class Tab(
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
     val isBookmarked: Boolean = false,
-    val sniffedLinks: List<SniffedLink> = emptyList()
+    val sniffedLinks: List<SniffedLink> = emptyList(),
+    val sniffState: SniffState = SniffState.IDLE,
+    val sniffProgress: String = ""
 ) {
     /**
      * 是否是新标签页（URL 为空）
