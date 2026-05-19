@@ -115,13 +115,15 @@ fun BrowserScreen(
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
 
-    // 加载 JS 脚本
-    var snifferScript by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) {
+    // 同步加载 JS 脚本（避免 LaunchedEffect 异步导致首次页面加载时脚本为空）
+    val snifferScript = remember {
         try {
-            snifferScript = context.assets.open("sniffer.js").bufferedReader().use { it.readText() }
+            val script = context.assets.open("sniffer.js").bufferedReader().use { it.readText() }
+            android.util.Log.d("CatCatch", "sniffer.js 同步加载成功, 长度=${script.length}")
+            script
         } catch (e: Exception) {
-            // 脚本加载失败
+            android.util.Log.e("CatCatch", "sniffer.js 加载失败", e)
+            ""
         }
     }
 
@@ -1733,15 +1735,18 @@ private fun createWebView(
                 view.title?.let { viewModel.onPageTitleChanged(it, tabId) }
                 if (snifferScript.isNotEmpty()) {
                     view.evaluateJavascript(snifferScript, null)
-                    // 根据当前嗅探模式选择性初始化
                     val currentMode = viewModel.state.value.sniffMode
                     val initScript = when (currentMode) {
                         com.catcatch.ui.browser.SniffMode.AUTO -> "CatCatchSniffer.init()"
                         com.catcatch.ui.browser.SniffMode.NETWORK -> "CatCatchSniffer.initNetworkOnly()"
                         com.catcatch.ui.browser.SniffMode.DOM -> "CatCatchSniffer.initDomOnly()"
                         com.catcatch.ui.browser.SniffMode.DEEP_SCAN -> "CatCatchSniffer.deepScan()"
+                        com.catcatch.ui.browser.SniffMode.DISGUISE -> "CatCatchSniffer.initDisguise()"
                     }
+                    android.util.Log.d("CatCatch", "onPageFinished: mode=$currentMode, script=$initScript, snifferLen=${snifferScript.length}")
                     view.evaluateJavascript(initScript, null)
+                } else {
+                    android.util.Log.w("CatCatch", "onPageFinished: snifferScript为空! mode=${viewModel.state.value.sniffMode}")
                 }
             }
         }

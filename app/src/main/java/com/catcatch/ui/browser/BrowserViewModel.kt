@@ -44,7 +44,8 @@ enum class SniffMode(val label: String) {
     AUTO("自动"),
     NETWORK("网络拦截"),
     DOM("DOM 监听"),
-    DEEP_SCAN("深度扫描")
+    DEEP_SCAN("深度扫描"),
+    DISGUISE("伪装")
 }
 
 /**
@@ -451,7 +452,7 @@ class BrowserViewModel @Inject constructor(
             )
         }
 
-        // 查找域名对应的嗅探模式绑定
+        // 查找域名对应的嗅探模式绑定（仅在有绑定时切换，无绑定时保留当前模式）
         viewModelScope.launch {
             val matchingBookmark = findBookmarkForDomain(finalUrl)
             if (matchingBookmark != null && matchingBookmark.sniffMode.isNotEmpty()) {
@@ -464,10 +465,8 @@ class BrowserViewModel @Inject constructor(
                     _state.update { state -> state.copy(sniffMode = it) }
                     addLog("应用站点嗅探模式: ${it.label}")
                 }
-            } else {
-                // 重置为默认 AUTO
-                _state.update { state -> state.copy(sniffMode = SniffMode.AUTO) }
             }
+            // 无绑定时保留用户当前选择的模式，不重置
         }
     }
 
@@ -723,6 +722,7 @@ class BrowserViewModel @Inject constructor(
     }
 
     fun setSniffMode(mode: SniffMode, persistForDomain: Boolean = false) {
+        android.util.Log.d("CatCatch", "setSniffMode: ${mode.name}, persist=$persistForDomain")
         _state.update { it.copy(sniffMode = mode) }
 
         // 如果需要持久化到域名
@@ -761,12 +761,15 @@ class BrowserViewModel @Inject constructor(
             // 延迟后重新初始化嗅探（等待页面加载完成）
             viewModelScope.launch {
                 kotlinx.coroutines.delay(3000) // 等待 3 秒
-                when (mode) {
-                    SniffMode.AUTO -> jsExecutor?.invoke("CatCatchSniffer.init()")
-                    SniffMode.NETWORK -> jsExecutor?.invoke("CatCatchSniffer.initNetworkOnly()")
-                    SniffMode.DOM -> jsExecutor?.invoke("CatCatchSniffer.initDomOnly()")
-                    SniffMode.DEEP_SCAN -> jsExecutor?.invoke("CatCatchSniffer.deepScan()")
+                val jsCmd = when (mode) {
+                    SniffMode.AUTO -> "CatCatchSniffer.init()"
+                    SniffMode.NETWORK -> "CatCatchSniffer.initNetworkOnly()"
+                    SniffMode.DOM -> "CatCatchSniffer.initDomOnly()"
+                    SniffMode.DEEP_SCAN -> "CatCatchSniffer.deepScan()"
+                    SniffMode.DISGUISE -> "CatCatchSniffer.initDisguise()"
                 }
+                android.util.Log.d("CatCatch", "延迟执行JS: $jsCmd")
+                jsExecutor?.invoke(jsCmd)
                 addLog("重新初始化嗅探: ${mode.label}")
             }
         }
@@ -796,12 +799,15 @@ class BrowserViewModel @Inject constructor(
             // 延迟后重新初始化嗅探（等待页面加载完成）
             viewModelScope.launch {
                 kotlinx.coroutines.delay(3000) // 等待 3 秒
-                when (mode) {
-                    SniffMode.AUTO -> jsExecutor?.invoke("CatCatchSniffer.init()")
-                    SniffMode.NETWORK -> jsExecutor?.invoke("CatCatchSniffer.initNetworkOnly()")
-                    SniffMode.DOM -> jsExecutor?.invoke("CatCatchSniffer.initDomOnly()")
-                    SniffMode.DEEP_SCAN -> jsExecutor?.invoke("CatCatchSniffer.deepScan()")
+                val jsCmd = when (mode) {
+                    SniffMode.AUTO -> "CatCatchSniffer.init()"
+                    SniffMode.NETWORK -> "CatCatchSniffer.initNetworkOnly()"
+                    SniffMode.DOM -> "CatCatchSniffer.initDomOnly()"
+                    SniffMode.DEEP_SCAN -> "CatCatchSniffer.deepScan()"
+                    SniffMode.DISGUISE -> "CatCatchSniffer.initDisguise()"
                 }
+                android.util.Log.d("CatCatch", "延迟执行JS: $jsCmd")
+                jsExecutor?.invoke(jsCmd)
                 addLog("重新初始化嗅探: ${mode.label}")
             }
         }
