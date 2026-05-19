@@ -479,38 +479,59 @@ fun BrowserScreen(
                 onDismissRequest = { viewModel.dismissLinkContextMenu() },
                 title = {
                     Text(
-                        "链接操作",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                },
-                text = {
-                    Text(
                         url,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 },
-                confirmButton = {
-                    TextButton(onClick = { viewModel.openLinkInNewTab(url) }) {
-                        Text("在新标签页中打开")
+                text = {
+                    Column {
+                        // 在新标签页中打开
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewModel.openLinkInNewTab(url) }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("在新标签页中打开", style = MaterialTheme.typography.bodyLarge)
+                        }
+                        // 复制链接
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("link", url))
+                                    viewModel.dismissLinkContextMenu()
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.FileDownload,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("复制链接", style = MaterialTheme.typography.bodyLarge)
+                        }
                     }
                 },
-                dismissButton = {
-                    Row {
-                        TextButton(onClick = {
-                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("link", url))
-                            viewModel.dismissLinkContextMenu()
-                        }) {
-                            Text("复制链接")
-                        }
-                        TextButton(onClick = { viewModel.dismissLinkContextMenu() }) {
-                            Text("取消")
-                        }
-                    }
-                },
+                confirmButton = {},
+                dismissButton = {},
                 shape = RoundedCornerShape(16.dp)
             )
         }
