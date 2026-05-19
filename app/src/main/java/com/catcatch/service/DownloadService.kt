@@ -48,6 +48,8 @@ class DownloadService : Service() {
         const val EXTRA_ACTION = "action"
         const val ACTION_CANCEL = "cancel"
         private const val FOREGROUND_NOTIFICATION_ID = 1000
+        /** 部分下载阈值：成功率 >= 80% 时继续合并保存 */
+        private const val PARTIAL_DOWNLOAD_THRESHOLD = 0.8f
 
         fun start(context: Context, taskId: Long) {
             val intent = Intent(context, DownloadService::class.java).apply {
@@ -349,27 +351,43 @@ class DownloadService : Service() {
                 }
 
                 if (failedSegments.isNotEmpty()) {
+                    val failedCount = failedSegments.size
+                    val successCount = segments.size - failedCount
+                    val successRate = successCount.toFloat() / segments.size
                     val sampleIndices = failedSegments.take(3).joinToString { "#${it.index}" }
-                    // 判断主要失败原因
-                    val has401 = failedSegments.any { (_, seg) ->
-                        // 通过检查 URL 中的 exp 参数判断是否为过期 token
-                        seg.url.contains("exp=")
-                    }
-                    val errorMsg = if (has401) {
-                        "鉴权过期: ${failedSegments.size} 个分片的访问链接已失效 ($sampleIndices 等)"
+
+                    if (successRate >= PARTIAL_DOWNLOAD_THRESHOLD) {
+                        // 大部分分片成功（>=80%），继续合并保存，提示部分缺失
+                        Log.w(taskTag, "[$taskId] $failedCount 个分片失败，但 ${successCount}/${segments.size} 成功(${(successRate * 100).toInt()}%)，继续合并保存")
+                        repository.updateTaskStatus(
+                            taskId, TaskStatus.DOWNLOADING,
+                            progress = successCount.toFloat() / segments.size,
+                            downloaded = successCount,
+                            message = "已完成 $successCount/${segments.size} 个分片"
+                        )
                     } else {
-                        "${failedSegments.size} 个分片下载失败 ($sampleIndices 等)"
+                        // 失败比例过高，中止任务
+                        val has401 = failedSegments.any { (_, seg) ->
+                            seg.url.contains("exp=")
+                        }
+                        val errorMsg = if (has401) {
+                            "鉴权过期: ${failedCount} 个分片的访问链接已失效 ($sampleIndices 等)"
+                        } else {
+                            "${failedCount} 个分片下载失败 ($sampleIndices 等)"
+                        }
+                        Log.e(taskTag, "[$taskId] $errorMsg，成功率 ${(successRate * 100).toInt()}%，任务中止")
+                        repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = errorMsg)
+                        showNotification(task.outputName, if (has401) "下载失败: 链接已过期" else "下载失败")
+                        return
                     }
-                    Log.e(taskTag, "[$taskId] $errorMsg，任务中止")
-                    repository.updateTaskStatus(taskId, TaskStatus.FAILED, message = errorMsg)
-                    showNotification(task.outputName, if (has401) "下载失败: 链接已过期" else "下载失败")
-                    return
                 }
             }
 
             val downloaded = completedCount.get()
+            val isPartial = downloaded < segments.size
+            val partialMsg = if (isPartial) "（部分分片缺失）" else ""
             repository.updateTaskStatus(taskId, TaskStatus.DOWNLOADING, progress = 1f, downloaded = downloaded)
-            Log.i(taskTag, "[$taskId] 全部分片下载完成: $downloaded/${segments.size}")
+            Log.i(taskTag, "[$taskId] 分片下载完成: $downloaded/${segments.size}$partialMsg")
 
             // 合并分片
             repository.updateTaskStatus(taskId, TaskStatus.MERGING)
@@ -393,7 +411,7 @@ class DownloadService : Service() {
             val transcodeMode = settingsRepository.transcodeMode.first()
             if (ffmpegConverter.isAvailable(transcodeMode)) {
                 val transcodeJob = serviceScope.launch {
-                    transcodeAndSave(taskId, task.outputName, mergedFile, downloadDir, useSaf, safUriString, transcodeMode, mergedSize, videoInfo)
+                    transcodeAndSave(taskId, task.outputName, mergedFile, downloadDir, useSaf, safUriString, transcodeMode, mergedSize, videoInfo, isPartial, segments.size, downloaded)
                     transcodeJobs.remove(taskId)
                     updateForegroundNotification()
                     stopSelfIfIdle()
@@ -407,9 +425,11 @@ class DownloadService : Service() {
                 } else {
                     mergedFile.absolutePath
                 }
+                val completeMsg = if (isPartial) "已完成（${downloaded}/${segments.size}个分片）" else "下载完成"
                 repository.updateTaskStatus(
                     taskId, TaskStatus.COMPLETED,
-                    progress = 1f, downloaded = segments.size, total = segments.size,
+                    progress = 1f, downloaded = downloaded, total = segments.size,
+                    message = completeMsg,
                     resolution = videoInfo.resolution, fileSize = mergedSize,
                     savedPath = savedPath
                 )
@@ -435,7 +455,10 @@ class DownloadService : Service() {
         safUriString: String?,
         transcodeMode: Int = 0,
         mergedSize: Long = 0,
-        videoInfo: FFmpegConverter.VideoInfo = FFmpegConverter.VideoInfo()
+        videoInfo: FFmpegConverter.VideoInfo = FFmpegConverter.VideoInfo(),
+        isPartial: Boolean = false,
+        totalSegments: Int = 0,
+        downloadedSegments: Int = 0
     ) {
         try {
             repository.updateTaskStatus(taskId, TaskStatus.TRANSCODING, message = "转码中...")
@@ -456,9 +479,15 @@ class DownloadService : Service() {
                 } else {
                     mp4File.absolutePath
                 }
+                val completeMsg = if (isPartial) {
+                    "已完成（${downloadedSegments}/${totalSegments}个分片，已转码）"
+                } else {
+                    "转码完成"
+                }
                 repository.updateTaskStatus(
                     taskId, TaskStatus.COMPLETED,
-                    progress = 1f, message = "转码完成",
+                    progress = 1f, message = completeMsg,
+                    downloaded = downloadedSegments, total = totalSegments,
                     resolution = finalResolution, fileSize = mp4Size,
                     savedPath = savedPath
                 )
